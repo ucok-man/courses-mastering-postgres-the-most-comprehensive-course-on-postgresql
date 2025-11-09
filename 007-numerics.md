@@ -1,0 +1,704 @@
+# 📝 Tipe Data Numeric (DECIMAL) di PostgreSQL
+
+## 1. Ringkasan Singkat
+
+Video ini membahas tipe data `NUMERIC` (alias `DECIMAL`) di PostgreSQL, yang merupakan tipe data untuk bilangan pecahan dengan presisi sempurna. Pembahasan mencakup perbandingan antara INTEGER, NUMERIC, dan floating-point, serta cara menggunakan parameter precision dan scale untuk mengontrol format angka. Tipe ini ideal untuk data finansial yang membutuhkan akurasi mutlak.
+
+## 2. Konsep Utama
+
+### a. Spektrum Tipe Data Numerik
+
+Ada **tiga kategori utama** untuk menyimpan angka di PostgreSQL, masing-masing dengan trade-off berbeda:
+
+**Visualisasi spektrum:**
+
+```
+[INTEGER] ←→ [NUMERIC/DECIMAL] ←→ [FLOATING-POINT]
+  Fast         Slow, Precise        Fast
+  Accurate     Accurate            Approximate
+  Whole only   Fractional          Fractional
+```
+
+**Perbandingan detail:**
+
+| Aspek                  | INTEGER                 | NUMERIC/DECIMAL     | FLOATING-POINT         |
+| ---------------------- | ----------------------- | ------------------- | ---------------------- |
+| **Support fractional** | ❌ Hanya bilangan bulat | ✅ Ya               | ✅ Ya                  |
+| **Akurasi**            | ✅ Sempurna             | ✅ Sempurna         | ❌ Aproksimasi         |
+| **Presisi**            | ✅ Tidak ada loss       | ✅ Tidak ada loss   | ❌ Bisa hilang presisi |
+| **Kecepatan operasi**  | ⚡ Sangat cepat         | 🐌 Sangat lambat    | ⚡ Sangat cepat        |
+| **Use case**           | Counter, ID, quantity   | **Uang, finansial** | Sains, grafik, approx. |
+
+**Analogi sederhana:**
+
+```
+INTEGER       = Menghitung kelereng (1, 2, 3, 4...)
+NUMERIC       = Menghitung uang (Rp 1.250,75) - harus tepat!
+FLOATING-POINT = Mengukur suhu (23.456°C) - boleh sedikit meleset
+```
+
+### b. NUMERIC vs DECIMAL: Sama Persis
+
+**Fakta penting:**
+
+- `NUMERIC` dan `DECIMAL` adalah **identik** di PostgreSQL
+- Keduanya adalah **alias** untuk tipe data yang sama
+- Bisa digunakan bergantian tanpa perbedaan apa pun
+
+**Bukti:**
+
+```sql
+-- Deklarasi dengan DECIMAL
+CREATE TABLE test1 (
+    interest_rate DECIMAL
+);
+
+-- Deklarasi dengan NUMERIC
+CREATE TABLE test2 (
+    interest_rate NUMERIC
+);
+
+-- Cek dengan \d di psql
+\d test1
+-- Column: interest_rate | Type: numeric
+
+\d test2
+-- Column: interest_rate | Type: numeric
+
+-- Keduanya menunjukkan "numeric" - mereka sama!
+```
+
+**Preferensi pribadi:**
+
+- Instruktor lebih suka `NUMERIC` (lebih jelas)
+- Pilih salah satu dan **konsisten** dalam codebase Anda
+
+### c. NUMERIC Tanpa Parameter: Unbounded Precision
+
+**Karakteristik NUMERIC tanpa parameter:**
+
+```sql
+CREATE TABLE unlimited (
+    value NUMERIC  -- Tanpa parameter apa pun
+);
+```
+
+**Kemampuan:**
+
+1. **Tidak ada batasan range** - bisa lebih besar dari BIGINT
+2. **Presisi sempurna** - tidak ada loss precision
+3. **Support decimal** - bisa menyimpan pecahan
+4. **Seperti TEXT column** - menerima hampir semua input
+
+**Contoh: Lebih besar dari BIGINT**
+
+```sql
+-- BIGINT max: ±9,223,372,036,854,775,807 (9 quintillion)
+
+-- ❌ Angka terlalu besar untuk BIGINT
+SELECT 92233720368547758079223372036854775807::BIGINT;
+-- ERROR: bigint out of range
+
+-- ✅ NUMERIC bisa handle angka sebesar ini
+SELECT 92233720368547758079223372036854775807::NUMERIC;
+-- Result: 92233720368547758079223372036854775807
+
+-- ✅ NUMERIC juga bisa dengan decimal
+SELECT 92233720368547758079223372036854775807.12345::NUMERIC;
+-- Result: 92233720368547758079223372036854775807.12345
+```
+
+**Kapan menggunakan NUMERIC unbounded:**
+
+- Ketika **tidak tahu** batas data di masa depan
+- Data **finansial global** dengan berbagai denominasi
+- **Perhitungan ilmiah** yang butuh presisi arbitrary
+
+**Trade-off:**
+
+- ✅ **Pro:** Flexibility maksimal, tidak ada batasan
+- ❌ **Con:** Sangat lambat, tidak ada validasi built-in
+
+### d. NUMERIC dengan Parameter: Precision dan Scale
+
+**Sintaks:**
+
+```sql
+NUMERIC(precision, scale)
+```
+
+**Definisi:**
+
+- **Precision:** Total jumlah digit (keseluruhan angka)
+- **Scale:** Jumlah digit di **sebelah kanan** decimal point
+
+**Ilustrasi visual:**
+
+```
+Angka: 12.345
+
+├─ Precision = 5 (total semua digit: 1, 2, 3, 4, 5)
+└─ Scale = 3 (digit setelah titik: 3, 4, 5)
+
+Left side: 2 digits (1, 2)
+Right side: 3 digits (3, 4, 5)
+```
+
+**Contoh implementasi:**
+
+```sql
+-- NUMERIC(5, 3) = 5 total digits, 3 di kanan decimal
+CREATE TABLE measurements (
+    value NUMERIC(5, 3)
+);
+
+-- ✅ VALID: Sesuai dengan (5, 3)
+INSERT INTO measurements VALUES (12.345);
+-- Result: 12.345
+-- Total digits: 5 ✓
+-- Digits after decimal: 3 ✓
+
+-- ❌ ERROR: Terlalu banyak digit total
+INSERT INTO measurements VALUES (123.45);
+-- ERROR: numeric field overflow
+-- Reason: 123.45 = 5 digits, tapi left side butuh 3 (lebih dari 2)
+
+-- ✅ VALID tapi ada rounding
+INSERT INTO measurements VALUES (12.3456);
+-- Result: 12.346 (rounded dari 12.3456)
+-- Reason: Scale = 3, jadi digit ke-4 (6) di-round
+```
+
+**Logika rounding:**
+
+```sql
+CREATE TABLE prices (
+    amount NUMERIC(5, 2)  -- Total 5 digits, 2 desimal
+);
+
+-- Input: 123.456
+-- Step 1: Check total digits -> 6 digits (terlalu banyak) ❌
+INSERT INTO prices VALUES (123.456);
+-- ERROR: numeric field overflow
+
+-- Input: 12.345
+-- Step 1: Check total digits -> 5 digits ✓
+-- Step 2: Scale = 2, tapi input punya 3 desimal
+-- Step 3: Round digit ke-3 (5) -> round up ke 12.35
+INSERT INTO prices VALUES (12.345);
+-- Result: 12.35
+```
+
+**Analogi dengan VARCHAR:**
+
+```sql
+-- VARCHAR(255) = max 255 karakter
+column_name VARCHAR(255)
+
+-- NUMERIC(10, 2) = max 10 digit total, 2 desimal
+column_name NUMERIC(10, 2)
+
+-- Keduanya enforce batasan!
+```
+
+### e. Parameter NUMERIC: Variasi Penggunaan
+
+#### **1. Single Parameter (Precision Only)**
+
+```sql
+-- NUMERIC(5) = precision 5, scale default 0
+CREATE TABLE whole_numbers (
+    value NUMERIC(5)  -- Sama dengan NUMERIC(5, 0)
+);
+
+-- ✅ Valid (bilangan bulat)
+INSERT INTO whole_numbers VALUES (12345);
+-- Result: 12345
+
+-- ✅ Valid dengan rounding
+INSERT INTO whole_numbers VALUES (123.45);
+-- Result: 123 (desimal dihilangkan)
+
+-- Explicit sama dengan implicit
+CREATE TABLE explicit (
+    value NUMERIC(5, 0)  -- Sama persis dengan NUMERIC(5)
+);
+```
+
+#### **2. Negative Scale (Rounding dari Decimal)**
+
+**Fitur baru:** Tersedia sejak PostgreSQL 15+
+
+```sql
+-- NUMERIC(5, -2) = round 2 tempat dari kiri decimal point
+CREATE TABLE rounded (
+    value NUMERIC(5, -2)
+);
+
+-- Input: 1234567
+-- Precision = 5 (significant digits sebelum rounding)
+-- Scale = -2 (round 2 digit dari kanan)
+
+INSERT INTO rounded VALUES (1234567);
+-- Result: 1234600
+-- Proses:
+-- 1. Ambil 5 significant digits: 12345
+-- 2. Round 2 posisi dari kanan: 12346
+-- 3. Tambah padding zeros: 1234600
+
+-- Contoh lain
+INSERT INTO rounded VALUES (12345.67);
+-- Result: 12300
+-- Proses:
+-- 1. Significant digits: 123 (dari 12345)
+-- 2. Round 2 posisi: 123 -> 12300
+```
+
+**Penjelasan "significant digits":**
+
+```
+Input:  1234567
+Scale:  -2
+
+Step 1: Identify 5 significant unrounded digits
+        -> 12345 (6 dan 7 tidak dihitung)
+
+Step 2: Apply rounding from decimal point left
+        -> Round 2 places: 67 rounds to 00 (down)
+        -> But affects the previous digit: 12346
+
+Step 3: Add zeros for scale
+        -> 1234600
+
+PERHATIAN: Total output bisa > precision!
+- Precision mengacu pada significant UNROUNDED digits
+- Zeros padding tidak dihitung
+```
+
+**Use case negative scale:**
+
+```sql
+-- Rounding untuk data aggregasi
+CREATE TABLE sales_summary (
+    total_sales NUMERIC(10, -2)  -- Round ke ratusan
+);
+
+INSERT INTO sales_summary VALUES (1234567.89);
+-- Result: 1234600 (rounded to nearest hundred)
+
+-- Berguna untuk:
+-- - Summary reports
+-- - Data warehouse aggregations
+-- - Simplified visualization
+```
+
+**Peringatan:**
+
+```sql
+-- Precision still enforced!
+CREATE TABLE test (
+    value NUMERIC(5, -2)
+);
+
+-- ❌ ERROR: Terlalu banyak significant digits
+INSERT INTO test VALUES (123456789);
+-- ERROR: numeric field overflow
+-- Reason: 1234567 = 7 significant digits, tapi precision = 5
+
+-- ✅ VALID
+INSERT INTO test VALUES (12345);
+-- Result: 12300 (5 significant digits, rounded)
+```
+
+### f. Best Practices untuk NUMERIC
+
+**1. Untuk data finansial (uang):**
+
+```sql
+-- ✅ RECOMMENDED: Always use NUMERIC for money
+CREATE TABLE transactions (
+    amount NUMERIC(10, 2)  -- Max 99,999,999.99
+);
+
+-- Contoh: IDR (Rupiah)
+-- Max: 99,999,999.99 = ~100 juta rupiah
+-- Precision cukup untuk transaksi retail
+
+-- Contoh: USD (Dollar)
+-- Max: 99,999,999.99 = ~100 juta dollar
+-- Precision cukup untuk kebanyakan transaksi bisnis
+
+-- Untuk transaksi lebih besar
+CREATE TABLE large_transactions (
+    amount NUMERIC(15, 2)  -- Max 9,999,999,999,999.99
+);
+```
+
+**2. Untuk interest rates:**
+
+```sql
+-- Interest rate biasanya dalam persen dengan presisi tinggi
+CREATE TABLE loans (
+    description TEXT,
+    interest_rate NUMERIC(5, 4)  -- Contoh: 5.2500%
+);
+
+-- Contoh values:
+-- 5.2500 = 5.25%
+-- 12.3456 = 12.3456%
+-- 0.0125 = 0.0125% (untuk rate sangat kecil)
+
+INSERT INTO loans VALUES
+    ('Home Loan', 5.2500),
+    ('Car Loan', 12.3456),
+    ('Micro Finance', 0.0125);
+```
+
+**3. Untuk scientific calculations:**
+
+```sql
+-- Jika butuh presisi sempurna (rare)
+CREATE TABLE scientific_data (
+    measurement NUMERIC  -- Unbounded untuk flexibility
+);
+
+-- Tapi biasanya floating-point lebih cocok untuk sains
+-- (akan dibahas video berikutnya)
+```
+
+**4. Hindari over-specification:**
+
+```sql
+-- ❌ OVERKILL: Precision terlalu ketat tanpa alasan
+CREATE TABLE simple_prices (
+    price NUMERIC(8, 2)  -- Max 999,999.99
+);
+-- Better: NUMERIC(10, 2) - sedikit lebih flexible
+
+-- ❌ TOO LOOSE: Unbounded tanpa alasan
+CREATE TABLE product_prices (
+    price NUMERIC  -- Tidak ada validasi!
+);
+-- Better: NUMERIC(10, 2) - batasan jelas
+```
+
+### g. Demonstrasi Membuktikan Fakta (Meta-Learning)
+
+**Poin penting dari video:**
+
+> "Reading the docs is great, reading books is great, **proving something to yourself - honestly, that's better**."
+
+**Metode yang ditunjukkan:**
+
+**1. Menggunakan `\d` (describe) di psql:**
+
+```bash
+-- Cek struktur table
+\d table_name
+
+-- Verify tipe data yang sebenarnya
+CREATE TABLE test (value DECIMAL);
+\d test
+-- Output: Type: numeric (bukan decimal!)
+-- Bukti: DECIMAL = alias dari NUMERIC
+```
+
+**2. Menggunakan `CAST` untuk testing:**
+
+```sql
+-- Test batasan BIGINT
+SELECT 92233720368547758079223372036854775807::BIGINT;
+-- ERROR: Membuktikan BIGINT punya batasan
+
+-- Test kemampuan NUMERIC
+SELECT 92233720368547758079223372036854775807::NUMERIC;
+-- SUCCESS: Membuktikan NUMERIC bisa lebih besar
+```
+
+**3. Trial and error dengan INSERT:**
+
+```sql
+-- Test precision dan scale
+CREATE TABLE test (value NUMERIC(5, 3));
+
+INSERT INTO test VALUES (12.345);   -- ✅ Berhasil
+INSERT INTO test VALUES (123.45);   -- ❌ Error -> pembuktian
+INSERT INTO test VALUES (12.3456);  -- ✅ Rounded -> pembuktian
+```
+
+**Takeaway:**
+
+- Jangan hanya **percaya dokumentasi** (verify!)
+- Jangan hanya **percaya tutorial** (test sendiri!)
+- **Hands-on experimentation** = pembelajaran terbaik
+
+## 3. Hubungan Antar Konsep
+
+**Progression dari INTEGER ke NUMERIC:**
+
+```
+INTEGER (Video sebelumnya)
+    ↓
+    ├─ Fast, accurate, tapi hanya whole numbers
+    └─ Kapan butuh fractional numbers?
+        ↓
+    NUMERIC (Video ini)
+        ↓
+        ├─ Slow tapi perfectly precise
+        ├─ Wajib untuk financial data
+        └─ Parameter (precision, scale) untuk control
+            ↓
+            ├─ Unbounded: Flexibility maksimal
+            ├─ Bounded: Validation built-in
+            └─ Negative scale: Advanced rounding
+```
+
+**Decision tree memilih tipe:**
+
+```
+Apakah data berupa angka?
+├─ Ya → Lanjut
+└─ Tidak → TEXT/VARCHAR
+
+Apakah butuh fractional numbers?
+├─ Tidak → INTEGER (SMALLINT/INT/BIGINT)
+└─ Ya → Lanjut
+
+Apakah akurasi sempurna MUTLAK diperlukan?
+├─ Ya → NUMERIC
+│   └─ Financial data? → NUMERIC(10, 2) atau sesuai kebutuhan
+└─ Tidak (boleh aproksimasi) → FLOATING-POINT (next video)
+```
+
+**Hubungan dengan konsep lain:**
+
+1. **Precision & Scale = Seperti VARCHAR length:**
+
+   - VARCHAR(255) membatasi panjang string
+   - NUMERIC(10, 2) membatasi format angka
+
+2. **NUMERIC sebagai "TEXT for numbers":**
+
+   - Unbounded NUMERIC ≈ TEXT (tidak ada batasan)
+   - Bounded NUMERIC ≈ VARCHAR(n) (ada batasan)
+
+3. **Trade-off speed vs accuracy:**
+   - INTEGER: Fast + accurate + whole only
+   - NUMERIC: Slow + accurate + fractional ✓
+   - FLOAT: Fast + approximate + fractional
+
+## 4. Catatan Tambahan / Insight
+
+### 💡 Tips Praktis
+
+**1. Default untuk uang: NUMERIC(10, 2)**
+
+```sql
+-- Rule of thumb untuk currency
+CREATE TABLE payments (
+    amount NUMERIC(10, 2)
+    -- Max: 99,999,999.99
+    -- Cukup untuk transaksi retail dan SME
+);
+
+-- Untuk enterprise/bank
+CREATE TABLE bank_transfers (
+    amount NUMERIC(15, 2)
+    -- Max: 9,999,999,999,999.99 (triliunan)
+);
+```
+
+**2. Interest rates: NUMERIC(5, 4) atau (6, 4)**
+
+```sql
+CREATE TABLE interest_rates (
+    rate NUMERIC(5, 4)  -- Max: 9.9999% (99,999 basis points)
+);
+
+-- Contoh values:
+-- 0.0525 = 5.25%
+-- 0.1234 = 12.34%
+```
+
+**3. Jangan gunakan NUMERIC untuk:**
+
+```sql
+-- ❌ BURUK: Counter atau quantity
+CREATE TABLE inventory (
+    quantity NUMERIC(10, 0)  -- Gunakan INTEGER!
+);
+
+-- ✅ BAIK
+CREATE TABLE inventory (
+    quantity INTEGER  -- Lebih cepat, tidak butuh decimal
+);
+```
+
+### ⚠️ Kesalahan Umum
+
+**1. Menggunakan FLOAT untuk uang:**
+
+```sql
+-- ❌ NEVER DO THIS!
+CREATE TABLE prices (
+    amount FLOAT  -- Precision loss = uang hilang!
+);
+
+-- Contoh masalah
+INSERT INTO prices VALUES (10.50);
+SELECT * FROM prices;
+-- Bisa jadi: 10.499999999 atau 10.500000001
+-- UANG ANDA HILANG!
+
+-- ✅ ALWAYS use NUMERIC for money
+CREATE TABLE prices (
+    amount NUMERIC(10, 2)
+);
+```
+
+**2. Tidak specify precision untuk production:**
+
+```sql
+-- ⚠️ RISKY untuk production
+CREATE TABLE production_prices (
+    price NUMERIC  -- Unbounded = no validation
+);
+
+-- ✅ BETTER: Explicit bounds
+CREATE TABLE production_prices (
+    price NUMERIC(10, 2) CHECK (price > 0)
+);
+```
+
+**3. Salah paham tentang precision dengan negative scale:**
+
+```sql
+CREATE TABLE test (value NUMERIC(5, -2));
+
+-- ❌ Mengira output max 5 digits
+INSERT INTO test VALUES (12345);
+-- Result: 12300 (5 digits result) ✓
+
+INSERT INTO test VALUES (123456);
+-- Result: 123500 (6 digits result!) ❌ ERROR
+-- Error karena 6 significant digits > precision 5
+```
+
+### 🎯 Analogi & Mental Models
+
+**Analogi untuk memahami Precision & Scale:**
+
+**NUMERIC seperti "form isian":**
+
+```
+NUMERIC(5, 2) = Form dengan 5 kotak, 2 di kanan decimal
+
+[_][_][_].[_][_]
+ └─┬─┘ │  └─┬─┘
+   │   │    └─ Scale: 2 boxes (right of decimal)
+   │   └────── Decimal point
+   └────────── 3 boxes left (5 total - 2 scale)
+
+Max value: 999.99
+```
+
+**NUMERIC(5, -2) seperti "rounding machine":**
+
+```
+Input:  [1][2][3][4][5][6][7]
+         └──────┬──────┘
+         Take 5 significant digits
+                ↓
+        [1][2][3][4][5]
+                ↓
+        Round 2 places left of decimal
+                ↓
+        [1][2][3][5][0][0]
+         (67 rounded to 00, affecting previous digits)
+```
+
+### 📊 Tabel Referensi Cepat
+
+**Common NUMERIC patterns:**
+
+```
+╔═══════════════════╦═══════════════════╦═══════════════════════════╗
+║ Use Case          ║ Declaration       ║ Max Value                 ║
+╠═══════════════════╬═══════════════════╬═══════════════════════════╣
+║ Retail prices     ║ NUMERIC(10, 2)    ║ 99,999,999.99             ║
+║ Interest rates    ║ NUMERIC(5, 4)     ║ 9.9999%                   ║
+║ Currency (large)  ║ NUMERIC(15, 2)    ║ 9,999,999,999,999.99      ║
+║ Percentages       ║ NUMERIC(5, 2)     ║ 100.00%                   ║
+║ Scientific (flex) ║ NUMERIC           ║ Unlimited                 ║
+║ Wholesale prices  ║ NUMERIC(12, 2)    ║ 9,999,999,999.99          ║
+╚═══════════════════╩═══════════════════╩═══════════════════════════╝
+```
+
+**Parameter combinations:**
+
+```
+NUMERIC          = Unbounded, accept anything
+NUMERIC(p)       = Total p digits, scale = 0 (whole numbers)
+NUMERIC(p, s)    = Total p digits, s after decimal
+NUMERIC(p, -s)   = Round s places left of decimal (PG 15+)
+```
+
+### 🔧 Testing Your Understanding
+
+**Quiz mental:**
+
+1. **Tipe data untuk harga produk e-commerce (max Rp 100 juta)?**
+
+   - Jawaban: `NUMERIC(10, 2)` atau `NUMERIC(12, 2)`
+
+2. **Tipe data untuk APR (Annual Percentage Rate)?**
+
+   - Jawaban: `NUMERIC(5, 4)` - presisi tinggi untuk rates
+
+3. **Bolehkah pakai INTEGER untuk harga?**
+
+   - Jawaban: ❌ Tidak! Harga punya cents/desimal, butuh NUMERIC
+
+4. **Kenapa NUMERIC lambat?**
+
+   - Jawaban: Arbitrary precision math lebih kompleks daripada fixed-size integer operations
+
+5. **Kapan pakai NUMERIC unbounded?**
+   - Jawaban: Kalau benar-benar tidak tahu bounds data, atau data science yang butuh flexibility
+
+## 5. Kesimpulan
+
+`NUMERIC` (alias `DECIMAL`) adalah tipe data PostgreSQL untuk bilangan pecahan dengan **presisi sempurna**. Berada di tengah spektrum antara INTEGER (cepat, whole numbers only) dan FLOATING-POINT (cepat, tapi approximate).
+
+**Key points:**
+
+1. **NUMERIC = DECIMAL:** Keduanya identik, hanya alias
+
+2. **Perfectly accurate:** Tidak ada loss precision seperti FLOAT - **wajib untuk financial data**
+
+3. **Trade-off:** Sangat lambat dibanding INTEGER dan FLOAT
+
+4. **Unbounded by default:** `NUMERIC` tanpa parameter bisa lebih besar dari BIGINT
+
+5. **Precision & Scale untuk control:**
+
+   - `NUMERIC(10, 2)`: 10 total digits, 2 setelah decimal
+   - Pattern umum untuk uang: `(10, 2)` atau `(15, 2)`
+   - Pattern untuk rates: `(5, 4)` atau `(6, 4)`
+
+6. **Negative scale:** Rounding dari kiri decimal point (PostgreSQL 15+)
+
+7. **Best practice:**
+   - Always NUMERIC untuk money
+   - Specify precision untuk production (validation)
+   - Don't over-optimize (gunakan reasonable bounds)
+
+**Kapan menggunakan NUMERIC:**
+
+- ✅ Financial data (harga, salary, tax)
+- ✅ Interest rates, percentages yang presisi
+- ✅ Accounting, billing systems
+- ❌ Counters, quantities (gunakan INTEGER)
+- ❌ Scientific approximations (gunakan FLOAT - next video)
+
+NUMERIC memberikan **peace of mind** untuk financial applications - presisi sempurna tanpa rounding errors yang bisa menyebabkan discrepancies dalam accounting. Trade-off performance adalah harga yang layak dibayar untuk akurasi finansial.
