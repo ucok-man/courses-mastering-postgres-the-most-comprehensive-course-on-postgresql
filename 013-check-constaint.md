@@ -293,7 +293,7 @@ Video memberikan perspektif tentang perdebatan klasik: Seberapa banyak logic yan
 CREATE TABLE products (
     price NUMERIC CHECK (price > 0),              -- Harga harus positif
     stock INTEGER CHECK (stock >= 0),             -- Stok tidak boleh negatif
-    sku TEXT CHECK (length(sku) = 8),            -- SKU harus 8 karakter
+    sku TEXT CHECK (length(sku) = 8),             -- SKU harus 8 karakter
     discount_price NUMERIC,
     CHECK (price >= discount_price)               -- Harga > harga diskon
 );
