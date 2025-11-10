@@ -13,24 +13,24 @@ Setelah mempelajari INTEGER dan NUMERIC, sekarang kita melengkapi spektrum denga
 **Visualisasi spektrum lengkap:**
 
 ```
-[INTEGER] ←→ [NUMERIC/DECIMAL] ←→ [FLOATING-POINT]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Fractional:  ❌ Tidak          ✅ Ya              ✅ Ya
-Accuracy:    ✅ Sempurna       ✅ Sempurna        ❌ Approximate
-Precision:   ✅ Perfect        ✅ Perfect         ❌ Dapat hilang
-Speed:       ⚡ Sangat cepat   🐌 Sangat lambat   ⚡ Sangat cepat
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+| Property     | INTEGER          | NUMERIC / DECIMAL     | FLOATING-POINT      |
+|--------------|------------------|-----------------------|---------------------|
+| Fractional   | ❌ Tidak         | ✅ Ya                 | ✅ Ya               |
+| Accuracy     | ✅ Sempurna      | ✅ Sempurna           | ❌ Approximate      |
+| Precision    | ✅ Perfect       | ✅ Perfect            | ❌ Dapat hilang     |
+| Speed        | ⚡ Sangat cepat   | 🐌 Sangat lambat      | ⚡ Sangat cepat      |
+
 ```
 
 **Perbandingan karakteristik:**
 
-| Aspek                   | INTEGER          | NUMERIC            | FLOATING-POINT         |
-| ----------------------- | ---------------- | ------------------ | ---------------------- |
-| **Support fractions**   | ❌               | ✅                 | ✅                     |
-| **Perfectly accurate**  | ✅               | ✅                 | ❌ Approximation       |
-| **Speed**               | ⚡⚡⚡ Very fast | 🐌 Very slow       | ⚡⚡⚡ Very fast       |
-| **Use case**            | Counters, IDs    | **Money, finance** | Science, IoT, graphics |
-| **Math precision loss** | Never            | Never              | **Possible**           |
+| Aspek                   | INTEGER          | NUMERIC        | FLOATING-POINT         |
+| ----------------------- | ---------------- | -------------- | ---------------------- |
+| **Support fractions**   | ❌               | ✅             | ✅                     |
+| **Perfectly accurate**  | ✅               | ✅             | ❌ Approximation       |
+| **Speed**               | ⚡⚡⚡ Very fast | 🐌 Very slow   | ⚡⚡⚡ Very fast       |
+| **Use case**            | Counters, Money  | Money, finance | Science, IoT, graphics |
+| **Math precision loss** | Never            | Never          | **Possible**           |
 
 **Key insight:**
 
@@ -373,7 +373,7 @@ Apakah butuh fractional numbers?
 └─ Ya → Lanjut
 
 Apakah ini FINANCIAL data (uang)?
-├─ Ya → NUMERIC (10, 2) - WAJIB!
+├─ Ya → NUMERIC | INTEGER
 └─ Tidak → Lanjut
 
 Apakah akurasi sempurna MUTLAK diperlukan?
@@ -445,7 +445,6 @@ Video 1: INTEGER
 
 Video 2: NUMERIC
 ├─ Slow, accurate, support fractional
-├─ WAJIB untuk financial data
 └─ Trade-off: Accuracy vs Speed
 
 Video 3: FLOATING-POINT (sekarang)
@@ -514,7 +513,7 @@ CREATE TABLE measurements (
 -- - Storage menjadi concern
 ```
 
-**2. NEVER gunakan floating-point untuk money:**
+**2. JANGAN PERNAH gunakan floating-point untuk money:**
 
 ```sql
 -- ❌ DISASTER WAITING TO HAPPEN
@@ -664,12 +663,12 @@ NUMERIC: "23.456789000000000°C"
 ╔════════════════╦═══════╦══════════════╦═══════════╦══════════════╗
 ║ Type           ║ Bytes ║ Precision    ║ Speed     ║ Use Case     ║
 ╠════════════════╬═══════╬══════════════╬═══════════╬══════════════╣
-║ SMALLINT       ║ 2     ║ Perfect      ║ ⚡⚡⚡      ║ Small counts ║
-║ INTEGER        ║ 4     ║ Perfect      ║ ⚡⚡⚡      ║ General IDs  ║
-║ BIGINT         ║ 8     ║ Perfect      ║ ⚡⚡⚡      ║ Large IDs    ║
+║ SMALLINT       ║ 2     ║ Perfect      ║ ⚡⚡⚡       ║ Small counts ║
+║ INTEGER        ║ 4     ║ Perfect      ║ ⚡⚡⚡       ║ General IDs  ║
+║ BIGINT         ║ 8     ║ Perfect      ║ ⚡⚡⚡       ║ Large IDs    ║
 ║ NUMERIC        ║ Var   ║ Perfect      ║ 🐌        ║ Money!       ║
-║ REAL (FLOAT4)  ║ 4     ║ ~6 digits    ║ ⚡⚡⚡      ║ IoT, sensors ║
-║ DOUBLE (FLOAT8)║ 8     ║ ~15 digits   ║ ⚡⚡⚡      ║ Science, ML  ║
+║ REAL (FLOAT4)  ║ 4     ║ ~6 digits    ║ ⚡⚡⚡       ║ IoT, sensors ║
+║ DOUBLE (FLOAT8)║ 8     ║ ~15 digits   ║ ⚡⚡⚡       ║ Science, ML  ║
 ╚════════════════╩═══════╩══════════════╩═══════════╩══════════════╝
 ```
 
