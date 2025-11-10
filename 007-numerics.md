@@ -14,7 +14,7 @@ Ada **tiga kategori utama** untuk menyimpan angka di PostgreSQL, masing-masing d
 
 ```
 [INTEGER] ←→ [NUMERIC/DECIMAL] ←→ [FLOATING-POINT]
-  Fast         Slow, Precise        Fast
+  Fast         Slow, Precise       Fast
   Accurate     Accurate            Approximate
   Whole only   Fractional          Fractional
 ```
@@ -32,8 +32,8 @@ Ada **tiga kategori utama** untuk menyimpan angka di PostgreSQL, masing-masing d
 **Analogi sederhana:**
 
 ```
-INTEGER       = Menghitung kelereng (1, 2, 3, 4...)
-NUMERIC       = Menghitung uang (Rp 1.250,75) - harus tepat!
+INTEGER        = Menghitung kelereng (1, 2, 3, 4...)
+NUMERIC        = Menghitung uang (Rp 1.250,75) - harus tepat!
 FLOATING-POINT = Mengukur suhu (23.456°C) - boleh sedikit meleset
 ```
 
@@ -111,7 +111,7 @@ SELECT 92233720368547758079223372036854775807.12345::NUMERIC;
 **Kapan menggunakan NUMERIC unbounded:**
 
 - Ketika **tidak tahu** batas data di masa depan
-- Data **finansial global** dengan berbagai denominasi
+- Data **finansial global** dengan berbagai jenis mata uang
 - **Perhitungan ilmiah** yang butuh presisi arbitrary
 
 **Trade-off:**
@@ -138,9 +138,9 @@ NUMERIC(precision, scale)
 Angka: 12.345
 
 ├─ Precision = 5 (total semua digit: 1, 2, 3, 4, 5)
-└─ Scale = 3 (digit setelah titik: 3, 4, 5)
+└─ Scale     = 3 (digit setelah titik: 3, 4, 5)
 
-Left side: 2 digits (1, 2)
+Left side : 2 digits (1, 2)
 Right side: 3 digits (3, 4, 5)
 ```
 
@@ -161,44 +161,12 @@ INSERT INTO measurements VALUES (12.345);
 -- ❌ ERROR: Terlalu banyak digit total
 INSERT INTO measurements VALUES (123.45);
 -- ERROR: numeric field overflow
--- Reason: 123.45 = 5 digits, tapi left side butuh 3 (lebih dari 2)
+-- Reason: 123.45 = 5 digits, tapi left side ada 3 (lebih dari 2)
 
 -- ✅ VALID tapi ada rounding
 INSERT INTO measurements VALUES (12.3456);
 -- Result: 12.346 (rounded dari 12.3456)
 -- Reason: Scale = 3, jadi digit ke-4 (6) di-round
-```
-
-**Logika rounding:**
-
-```sql
-CREATE TABLE prices (
-    amount NUMERIC(5, 2)  -- Total 5 digits, 2 desimal
-);
-
--- Input: 123.456
--- Step 1: Check total digits -> 6 digits (terlalu banyak) ❌
-INSERT INTO prices VALUES (123.456);
--- ERROR: numeric field overflow
-
--- Input: 12.345
--- Step 1: Check total digits -> 5 digits ✓
--- Step 2: Scale = 2, tapi input punya 3 desimal
--- Step 3: Round digit ke-3 (5) -> round up ke 12.35
-INSERT INTO prices VALUES (12.345);
--- Result: 12.35
-```
-
-**Analogi dengan VARCHAR:**
-
-```sql
--- VARCHAR(255) = max 255 karakter
-column_name VARCHAR(255)
-
--- NUMERIC(10, 2) = max 10 digit total, 2 desimal
-column_name NUMERIC(10, 2)
-
--- Keduanya enforce batasan!
 ```
 
 ### e. Parameter NUMERIC: Variasi Penggunaan
@@ -227,7 +195,9 @@ CREATE TABLE explicit (
 
 #### **2. Negative Scale (Rounding dari Decimal)**
 
-**Fitur baru:** Tersedia sejak PostgreSQL 15+
+**Fitur baru:** Tersedia sejak **PostgreSQL 15+**
+
+Fitur ini memungkinkan `NUMERIC(p, s)` memiliki **scale negatif**, yang berarti pembulatan dilakukan **ke kiri titik desimal**, bukan ke kanan seperti biasanya.
 
 ```sql
 -- NUMERIC(5, -2) = round 2 tempat dari kiri decimal point
@@ -238,77 +208,74 @@ CREATE TABLE rounded (
 -- Input: 1234567
 -- Precision = 5 (significant digits sebelum rounding)
 -- Scale = -2 (round 2 digit dari kanan)
-
 INSERT INTO rounded VALUES (1234567);
 -- Result: 1234600
 -- Proses:
--- 1. Ambil 5 significant digits: 12345
+-- 1. Ambil 5 significant digits dari 1234567: 12345
 -- 2. Round 2 posisi dari kanan: 12346
 -- 3. Tambah padding zeros: 1234600
+-- 4. Hasil 12346 <= precision (5) -> OK (nol tidak dihitung).
 
 -- Contoh lain
 INSERT INTO rounded VALUES (12345.67);
 -- Result: 12300
 -- Proses:
--- 1. Significant digits: 123 (dari 12345)
--- 2. Round 2 posisi: 123 -> 12300
+-- 1. Ambil 5 significant digits dari 12345: 12345
+-- 2. Round 2 posisi dan tambah pading: 123 -> 12300
+-- 3. Hasil 12300 <= precision (5) -> OK
 ```
 
 **Penjelasan "significant digits":**
 
 ```
-Input:  1234567
-Scale:  -2
+Input       : 1234567
+Precision   : 5
+Scale       : -2
 
 Step 1: Identify 5 significant unrounded digits
-        -> 12345 (6 dan 7 tidak dihitung)
+        -> jumlah digit significant = 7 (1234567)
 
-Step 2: Apply rounding from decimal point left
-        -> Round 2 places: 67 rounds to 00 (down)
-        -> But affects the previous digit: 12346
+Step 2: PostgreSQL mencoba membulatkan 2 digit terakhir (67)
+        -> 12345678 → dibulatkan menjadi 1234600
 
-Step 3: Add zeros for scale
-        -> 1234600
-
-PERHATIAN: Total output bisa > precision!
-- Precision mengacu pada significant UNROUNDED digits
-- Zeros padding tidak dihitung
+Step 3: Hasil pembulatan masih memiliki 5 digit signifikan (1234600)
+        -> Kurang atau sama dengan precision (5) -> OK!
 ```
 
-**Use case negative scale:**
+**PERHATIAN: Total output bisa > precision!**
+
+- Precision mengacu pada **significant UNROUNDED digits**
+- Zeros padding dari scale negatif **tidak dihitung dalam precision**
+
+**Contoh Error: Overflow**
 
 ```sql
--- Rounding untuk data aggregasi
-CREATE TABLE sales_summary (
-    total_sales NUMERIC(10, -2)  -- Round ke ratusan
-);
-
-INSERT INTO sales_summary VALUES (1234567.89);
--- Result: 1234600 (rounded to nearest hundred)
-
--- Berguna untuk:
--- - Summary reports
--- - Data warehouse aggregations
--- - Simplified visualization
+SELECT 12345678::NUMERIC(5, -2);
+-- ERROR:  numeric field overflow
 ```
 
-**Peringatan:**
+**Penjelasan:**
 
-```sql
--- Precision still enforced!
-CREATE TABLE test (
-    value NUMERIC(5, -2)
-);
-
--- ❌ ERROR: Terlalu banyak significant digits
-INSERT INTO test VALUES (123456789);
--- ERROR: numeric field overflow
--- Reason: 1234567 = 7 significant digits, tapi precision = 5
-
--- ✅ VALID
-INSERT INTO test VALUES (12345);
--- Result: 12300 (5 significant digits, rounded)
 ```
+Input       : 12345678
+Precision   : 5
+Scale       : -2
+
+Step 1: Cek jumlah digit signifikan (unrounded)
+        -> jumlah digit siginifikan = 8 (12345678)
+
+Step 2: PostgreSQL mencoba membulatkan 2 digit terakhir (78)
+        -> 12345678 → dibulatkan menjadi 12345700
+
+Step 3: Hasil pembulatan masih memiliki 6 digit signifikan (12345700)
+        -> Melebihi precision (5) -> !OK
+
+=> ERROR: numeric field overflow
+```
+
+**Intinya:**
+Walaupun `scale = -2` hanya menambah nol di belakang, PostgreSQL tetap memeriksa **jumlah digit signifikan sebelum nol padding**.
+Jika hasil pembulatan melebihi batas `precision`, maka PostgreSQL akan menolak nilai tersebut.
 
 ### f. Best Practices untuk NUMERIC
 
@@ -422,8 +389,8 @@ SELECT 92233720368547758079223372036854775807::NUMERIC;
 CREATE TABLE test (value NUMERIC(5, 3));
 
 INSERT INTO test VALUES (12.345);   -- ✅ Berhasil
-INSERT INTO test VALUES (123.45);   -- ❌ Error -> pembuktian
-INSERT INTO test VALUES (12.3456);  -- ✅ Rounded -> pembuktian
+INSERT INTO test VALUES (123.45);   -- ❌ Error
+INSERT INTO test VALUES (12.3456);  -- ✅ Rounded
 ```
 
 **Takeaway:**
@@ -445,7 +412,7 @@ INTEGER (Video sebelumnya)
     NUMERIC (Video ini)
         ↓
         ├─ Slow tapi perfectly precise
-        ├─ Wajib untuk financial data
+        ├─ Biasa untuk financial data
         └─ Parameter (precision, scale) untuk control
             ↓
             ├─ Unbounded: Flexibility maksimal
@@ -466,7 +433,6 @@ Apakah butuh fractional numbers?
 
 Apakah akurasi sempurna MUTLAK diperlukan?
 ├─ Ya → NUMERIC
-│   └─ Financial data? → NUMERIC(10, 2) atau sesuai kebutuhan
 └─ Tidak (boleh aproksimasi) → FLOATING-POINT (next video)
 ```
 
@@ -491,7 +457,7 @@ Apakah akurasi sempurna MUTLAK diperlukan?
 
 ### 💡 Tips Praktis
 
-**1. Default untuk uang: NUMERIC(10, 2)**
+**1. Biasa untuk data uang: NUMERIC(10, 2)**
 
 ```sql
 -- Rule of thumb untuk currency
@@ -550,7 +516,7 @@ SELECT * FROM prices;
 -- Bisa jadi: 10.499999999 atau 10.500000001
 -- UANG ANDA HILANG!
 
--- ✅ ALWAYS use NUMERIC for money
+-- ✅ Use NUMERIC for money over float
 CREATE TABLE prices (
     amount NUMERIC(10, 2)
 );
@@ -568,20 +534,6 @@ CREATE TABLE production_prices (
 CREATE TABLE production_prices (
     price NUMERIC(10, 2) CHECK (price > 0)
 );
-```
-
-**3. Salah paham tentang precision dengan negative scale:**
-
-```sql
-CREATE TABLE test (value NUMERIC(5, -2));
-
--- ❌ Mengira output max 5 digits
-INSERT INTO test VALUES (12345);
--- Result: 12300 (5 digits result) ✓
-
-INSERT INTO test VALUES (123456);
--- Result: 123500 (6 digits result!) ❌ ERROR
--- Error karena 6 significant digits > precision 5
 ```
 
 ### 🎯 Analogi & Mental Models
@@ -606,14 +558,14 @@ Max value: 999.99
 
 ```
 Input:  [1][2][3][4][5][6][7]
-         └──────┬──────┘
-         Take 5 significant digits
+         └──────┬────┘
+         Ambil 5 significant digits
                 ↓
         [1][2][3][4][5]
                 ↓
         Round 2 places left of decimal
                 ↓
-        [1][2][3][5][0][0]
+        [1][2][3][4][6][0][0]
          (67 rounded to 00, affecting previous digits)
 ```
 
@@ -657,7 +609,7 @@ NUMERIC(p, -s)   = Round s places left of decimal (PG 15+)
 
 3. **Bolehkah pakai INTEGER untuk harga?**
 
-   - Jawaban: ❌ Tidak! Harga punya cents/desimal, butuh NUMERIC
+   - Jawaban: Boleh! Tapi disimpan dalam unit terkecil mata uang tersebut.
 
 4. **Kenapa NUMERIC lambat?**
 
@@ -689,7 +641,7 @@ NUMERIC(p, -s)   = Round s places left of decimal (PG 15+)
 6. **Negative scale:** Rounding dari kiri decimal point (PostgreSQL 15+)
 
 7. **Best practice:**
-   - Always NUMERIC untuk money
+   - Use NUMERIC untuk money intead of FLOAT
    - Specify precision untuk production (validation)
    - Don't over-optimize (gunakan reasonable bounds)
 
