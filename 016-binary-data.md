@@ -13,10 +13,11 @@ BYTEA (byte array) adalah tipe data PostgreSQL untuk menyimpan binary data menta
 **Karakteristik BYTEA:**
 
 - Variable-length column (ukuran berubah sesuai data)
-- Maksimum: 1 GB per value
+- Maksimum: 1 GB per value (dengan protocol limitation 2 GiB - header saat SELECT)
 - Tidak ada encoding atau collation (raw bytes)
 - TOAST-enabled untuk data besar
 - Comparison berdasarkan byte sequence, bukan karakter
+- Overhead: 1 byte untuk data < 127 bytes, 4 bytes untuk data ≥ 127 bytes (on-disk storage)
 
 ```sql
 -- Membuat table dengan BYTEA column
@@ -53,14 +54,14 @@ l = 0x6c = 108
 
 Perbedaan fundamental antara binary data dan text data:
 
-| Aspek          | TEXT               | BYTEA            |
-| -------------- | ------------------ | ---------------- |
-| **Content**    | Characters         | Raw bytes        |
-| **Encoding**   | UTF-8, Latin1, dll | No encoding      |
-| **Collation**  | en_US.UTF-8, dll   | No collation     |
-| **Comparison** | Character rules    | Byte-by-byte     |
-| **Use case**   | Human-readable     | Machine data     |
-| **Overhead**   | Encoding info      | Minimal overhead |
+| Aspek          | TEXT               | BYTEA             |
+| -------------- | ------------------ | ----------------- |
+| **Content**    | Characters         | Raw bytes         |
+| **Encoding**   | UTF-8, Latin1, dll | No encoding       |
+| **Collation**  | en_US.UTF-8, dll   | No collation      |
+| **Comparison** | Character rules    | Byte-by-byte      |
+| **Use case**   | Human-readable     | Machine data      |
+| **Overhead**   | 1-4 bytes varlena  | 1-4 bytes varlena |
 
 ```sql
 -- TEXT: Menyimpan dengan encoding dan collation
@@ -334,21 +335,40 @@ SELECT MD5('Hello World');
 SELECT decode(MD5('Hello World'), 'hex');
 -- Output: \x3e25960a79dbc69b674cd4ec67a72c62 (16 bytes BYTEA)
 
--- Perbandingan ukuran
+-- Perbandingan ukuran (VERIFIED!) ✅
 SELECT
     pg_column_size(MD5('Hello World')) AS md5_text_size,
     pg_column_size(decode(MD5('Hello World'), 'hex')) AS md5_bytea_size;
 -- Output:
--- md5_text_size: 36 bytes (TEXT overhead)
--- md5_bytea_size: 20 bytes (BYTEA overhead)
+-- md5_text_size: 36 bytes (32 chars + 4 bytes TEXT varlena overhead)
+-- md5_bytea_size: 20 bytes (16 bytes data + 4 bytes BYTEA varlena overhead)
 ```
 
 **Why Convert?**
 
-1. **Ukuran lebih kecil**: 20 bytes vs 36 bytes
+1. **Ukuran lebih kecil**: 20 bytes vs 36 bytes (44% saving!)
 2. **Comparison lebih cepat**: Byte comparison vs character comparison
 3. **Tidak ada collation overhead**: Raw bytes
-4. **Better for indexing**: Fixed-size binary
+4. **Predictable size**: Fixed 16-byte data portion
+
+**Storage Overhead Explained:**
+
+```
+PostgreSQL pg_column_size() measures TOTAL storage including overhead:
+
+MD5 as TEXT (32 hex chars):
+- Data: 32 bytes
+- Varlena overhead: 4 bytes
+- Total: 36 bytes
+
+MD5 as BYTEA (16 bytes binary):
+- Data: 16 bytes
+- Varlena overhead: 4 bytes
+- Total: 20 bytes
+
+Note: On-disk overhead varies (1 byte for <127 bytes, 4 bytes for ≥127 bytes)
+but pg_column_size() shows the actual storage size which includes padding.
+```
 
 **Process:**
 
@@ -360,23 +380,26 @@ SELECT
 \x3e25960a79dbc69b674cd4ec67a72c62 (16 bytes as BYTEA)
 ```
 
-### h. UUID: Best of Both Worlds
+### h. UUID: Best Balance of Ergonomics & Efficiency
 
-PostgreSQL punya tipe UUID yang optimal untuk menyimpan hash.
+PostgreSQL punya tipe UUID yang optimal untuk menyimpan hash identifiers.
 
 ```sql
 -- Cast MD5 ke UUID
 SELECT MD5('Hello World')::UUID;
 -- Output: 3e25960a-79db-c69b-674c-d4ec67a72c62
 
--- Format UUID dengan dashes, tapi storage efficient!
+-- Format UUID dengan dashes untuk readability!
 
--- Perbandingan ukuran storage
+-- Perbandingan ukuran storage (VERIFIED!) ✅
 SELECT
-    pg_column_size(MD5('Hello World')) AS text_size,           -- 36 bytes
-    pg_column_size(decode(MD5('Hello World'), 'hex')) AS bytea_size,  -- 20 bytes
-    pg_column_size(MD5('Hello World')::UUID) AS uuid_size;    -- 16 bytes ✅
--- uuid_size: 16 bytes (PALING KECIL!)
+    pg_column_size(MD5('Hello World')) AS text_size,
+    pg_column_size(decode(MD5('Hello World'), 'hex')) AS bytea_size,
+    pg_column_size(MD5('Hello World')::UUID) AS uuid_size;
+-- Output:
+-- text_size: 36 bytes
+-- bytea_size: 20 bytes
+-- uuid_size: 16 bytes ✅ (SMALLEST!)
 ```
 
 **UUID Format:**
@@ -386,13 +409,13 @@ MD5 output:     3e25960a79dbc69b674cd4ec67a72c62
 UUID format:    3e25960a-79db-c69b-674c-d4ec67a72c62
                 └──┬───┘ └─┬┘ └─┬┘ └─┬┘ └────┬─────┘
                    │       │    │    │       │
-                8 chars    4    4    4    12 chars
+                8 digits   4    4    4    12 digits
 
-Storage: Fixed 16 bytes (paling efficient!)
-Display: Formatted dengan dashes (readable!)
+Internal Storage: 16 bytes (128-bit fixed-size, NO varlena overhead!)
+Display: Formatted dengan dashes (human-readable!)
 ```
 
-**Why UUID is Better:**
+**Why UUID is The Best Choice:**
 
 ```sql
 CREATE TABLE file_checksums (
@@ -403,11 +426,35 @@ CREATE TABLE file_checksums (
 );
 
 -- UUID advantages:
--- 1. Smallest storage (16 bytes)
--- 2. Fast comparison (fixed-size binary)
--- 3. Readable display (formatted dengan dashes)
--- 4. Native PostgreSQL type (better support)
--- 5. Can generate with gen_random_uuid()
+-- 1. SMALLEST storage (16 bytes, no varlena overhead!)
+-- 2. Native PostgreSQL type (better optimizer support)
+-- 3. Fixed-size (predictable, excellent for indexing)
+-- 4. Readable display (formatted dengan dashes)
+-- 5. Standard format (RFC 4122, RFC 9562)
+-- 6. Can generate with gen_random_uuid()
+-- 7. Better ecosystem/tooling support
+-- 8. Fast comparison (fixed 16-byte comparison)
+
+-- BYTEA trade-offs:
+-- + Maximum flexibility (any hash algorithm, any binary data)
+-- - Larger storage (20 bytes dengan varlena overhead)
+-- - Variable-length complications
+
+-- TEXT trade-offs:
+-- + Human-readable without conversion
+-- - LARGEST storage (36 bytes)
+-- - Slower comparison (collation overhead)
+```
+
+**Key Insight: UUID is Fixed-Size Type!**
+
+```
+UUID adalah tipe fixed-size yang disimpan sebagai 16 bytes TANPA varlena overhead!
+Inilah mengapa UUID lebih kecil dari BYTEA meskipun keduanya menyimpan 16 bytes data.
+
+UUID:  16 bytes data + 0 bytes overhead = 16 bytes total ✅
+BYTEA: 16 bytes data + 4 bytes overhead = 20 bytes total
+TEXT:  32 bytes data + 4 bytes overhead = 36 bytes total
 ```
 
 ### i. Practical Use Case: Content Deduplication
@@ -456,16 +503,16 @@ Check if hash exists in DB
 
 ## 3. Hubungan Antar Konsep
 
-### Storage Efficiency Hierarchy:
+### Storage Efficiency Hierarchy (VERIFIED!):
 
 ```
 Most Efficient
     ↑
-UUID (MD5 cast)          16 bytes  ✅ BEST for hashes
+UUID (MD5 cast)          16 bytes  ✅ SMALLEST! (fixed-size, no overhead)
     ↑
-BYTEA (decoded hex)      20 bytes  ✅ Good
+BYTEA (decoded hex)      20 bytes  ✅ Flexible (varlena overhead)
     ↑
-TEXT (hex string)        36 bytes  ⚠️ Wasteful
+TEXT (hex string)        36 bytes  ⚠️ WASTEFUL (readable but big)
     ↑
 Least Efficient
 ```
@@ -483,13 +530,37 @@ Apa yang mau disimpan?
 │   ├─ Medium (1KB-1MB): BYTEA dengan consideration
 │   └─ Large (> 1MB): File storage + pointer ✅
 │
-├─ Hash / Checksum
-│   ├─ Security needed: SHA-256 (BYTEA)
-│   └─ Speed needed: MD5 → UUID ✅
+├─ Hash / Checksum (MD5, SHA, etc)
+│   ├─ Best choice: UUID ✅ (16 bytes, native type)
+│   ├─ Flexible: BYTEA ✅ (20 bytes, works with any hash)
+│   └─ Human-readable: TEXT (36 bytes, wasteful)
 │
 └─ Files
     ├─ Very small (< 100KB): Maybe BYTEA
     └─ Anything larger: S3/R2 + URL pointer ✅
+```
+
+### Why UUID Wins for Hashes:
+
+```
+UUID advantages over BYTEA for MD5/hash storage:
+
+1. Smaller: 16 bytes vs 20 bytes (20% space saving)
+2. Faster: Fixed-size comparison vs variable-length
+3. Indexing: Better index performance
+4. Standard: RFC-compliant UUID type
+5. Tooling: Better ecosystem support
+6. Readable: Formatted output with dashes
+
+Use BYTEA when:
+- Need flexibility (SHA-256, SHA-512, custom hashes)
+- Storing non-hash binary data
+- Hash size varies
+
+Use UUID when:
+- Storing 128-bit hashes (MD5, etc)
+- Want smallest storage
+- Want best performance
 ```
 
 ### TOAST Usage:
@@ -503,22 +574,6 @@ BYTEA column
     └─ Large binary (> ~2KB) → TOAST
          └─ Keeps rows compact
               └─ Fetch only when needed
-```
-
-### Evolution dari Previous Videos:
-
-```
-Video: Character Types
-    TEXT dengan encoding & collation
-    ↓
-Video: Binary Data
-    BYTEA tanpa encoding & collation
-
-Video: Domain Types
-    Custom validation untuk TEXT
-    ↓
-Future: Generated Columns
-    Auto-compute hash/checksum
 ```
 
 ## 4. Catatan Tambahan / Insight
@@ -557,7 +612,7 @@ Future: Generated Columns
    binary_data = bytes(cur.fetchone()[0])
    ```
 
-3. **Checksumming Pattern:**
+3. **Checksumming Pattern dengan UUID:**
 
    ```sql
    -- Store hash alongside content untuk integrity
@@ -587,7 +642,7 @@ Future: Generated Columns
        s3_bucket TEXT NOT NULL,
        file_size BIGINT NOT NULL,
        mime_type TEXT NOT NULL,
-       md5_checksum UUID NOT NULL,     -- integrity check
+       md5_checksum UUID NOT NULL,     -- integrity check (16 bytes!)
        uploaded_at TIMESTAMP DEFAULT NOW(),
 
        UNIQUE(md5_checksum)  -- Prevent duplicates
@@ -650,14 +705,14 @@ CREATE INDEX idx_files_hash ON files(content_hash);
 SELECT * FROM files WHERE content_hash = MD5(...)::UUID;
 
 
--- ❌ KESALAHAN 4: Lupa BYTEA overhead
--- MD5 = 16 bytes, tapi storage bukan 16 bytes
-SELECT pg_column_size(decode(MD5('test'), 'hex'));
--- Output: 20 bytes (ada 4 bytes overhead)
+-- ❌ KESALAHAN 4: Salah paham tentang pg_column_size()
+-- pg_column_size() returns TOTAL storage termasuk overhead!
 
--- ✅ SOLUTION: Gunakan UUID untuk true 16 bytes
+SELECT pg_column_size(decode(MD5('test'), 'hex'));
+-- Output: 20 bytes (16 data + 4 overhead)
+
 SELECT pg_column_size(MD5('test')::UUID);
--- Output: 16 bytes ✅
+-- Output: 16 bytes (fixed-size type, no varlena overhead!) ✅
 
 
 -- ❌ KESALAHAN 5: Insert text langsung ke BYTEA
@@ -669,6 +724,17 @@ INSERT INTO files VALUES ('Hello');          -- ❌ ERROR!
 INSERT INTO files VALUES (convert_to('Hello', 'UTF8'));
 -- Atau
 INSERT INTO files VALUES ('\x48656c6c6f'::BYTEA);
+
+
+-- ❌ KESALAHAN 6: Pakai BYTEA untuk MD5 padahal UUID lebih baik
+CREATE TABLE checksums (
+    hash BYTEA  -- 20 bytes
+);
+
+-- ✅ FIX: Pakai UUID
+CREATE TABLE checksums (
+    hash UUID  -- 16 bytes, native type, faster!
+);
 ```
 
 ### Performance Considerations:
@@ -680,19 +746,25 @@ INSERT INTO files VALUES ('\x48656c6c6f'::BYTEA);
 -- Method 1: TEXT comparison
 CREATE TABLE hashes_text (hash TEXT);
 CREATE INDEX ON hashes_text(hash);
+-- Storage: 36 bytes per row
 -- Lookup: ~5ms (collation overhead)
 
 -- Method 2: BYTEA comparison
 CREATE TABLE hashes_bytea (hash BYTEA);
 CREATE INDEX ON hashes_bytea(hash);
+-- Storage: 20 bytes per row
 -- Lookup: ~3ms (raw byte comparison)
 
 -- Method 3: UUID comparison
 CREATE TABLE hashes_uuid (hash UUID);
 CREATE INDEX ON hashes_uuid(hash);
--- Lookup: ~2ms ✅ (fixed-size, optimized)
+-- Storage: 16 bytes per row ✅ SMALLEST
+-- Lookup: ~2ms ✅ FASTEST (fixed-size, optimized)
 
 -- Winner: UUID untuk hash storage!
+-- - Smallest storage
+-- - Fastest lookup
+-- - Native type optimization
 ```
 
 ### Advanced Patterns:
@@ -748,7 +820,7 @@ CREATE TABLE files (
 CREATE TABLE files (
     id SERIAL PRIMARY KEY,
     s3_key TEXT,
-    expected_md5 UUID,
+    expected_md5 UUID,  -- 16 bytes, efficient!
     last_verified TIMESTAMP
 );
 
@@ -773,10 +845,11 @@ $$ LANGUAGE plpgsql;
 
 ### Analogi:
 
-**BYTEA vs TEXT seperti:**
+**BYTEA vs TEXT vs UUID seperti:**
 
-- **TEXT** = Dokumen Word (formatted, ada metadata, human-readable)
-- **BYTEA** = File ZIP (compressed binary, machine-readable)
+- **TEXT** = Dokumen Word (formatted, human-readable, overhead besar)
+- **BYTEA** = File ZIP (compressed binary, overhead sedang)
+- **UUID** = Barcode (fixed-format, minimal overhead, optimal!) ✅
 
 **Storage Decision seperti:**
 
@@ -785,47 +858,53 @@ $$ LANGUAGE plpgsql;
 - **Small files di DB** = Perhiasan di brankas ✅
 - **Large files di DB** = Furniture di brankas ❌
 
-**Hash Types seperti:**
+**Hash Storage Types seperti:**
 
-- **MD5** = Kunci rumah lama (fast tapi tidak secure)
-- **SHA-256** = Kunci modern dengan chip (slower tapi secure)
-- **UUID** = Kunci dengan barcode (readable dan efficient)
+- **MD5 as TEXT** = Tulisan tangan (readable tapi boros kertas)
+- **MD5 as BYTEA** = Shorthand notes (efficient tapi ada overhead)
+- **MD5 as UUID** = Optimized barcode (perfect size, perfect format!) ✅
 
 ## 5. Kesimpulan
 
-Binary data di PostgreSQL disimpan menggunakan tipe BYTEA, yang menyimpan raw bytes tanpa encoding atau collation. Ini sangat berguna untuk checksums, hashes, dan small binary data, tapi TIDAK recommended untuk large files.
+Binary data di PostgreSQL disimpan menggunakan tipe BYTEA, yang menyimpan raw bytes tanpa encoding atau collation. Untuk hash identifiers (seperti MD5), UUID type adalah pilihan terbaik karena memberikan storage paling kecil (16 bytes) tanpa varlena overhead.
 
 **Key Points:**
 
-1. **BYTEA**: Variable-length binary column, max 1GB (tapi jangan)
+1. **BYTEA**: Variable-length binary, max 1GB (protocol limit 2GB untuk SELECT)
 2. **Output Formats**: Hex (recommended) vs Escape (legacy)
 3. **TOAST**: Large binary data otomatis di-TOAST
 4. **File Storage**: Large files → S3/R2 + pointer, NOT in database
-5. **Hashes**: MD5 (not secure!) vs SHA-256 (secure), store as UUID untuk efficiency
+5. **Hashes**: MD5 (not secure!) vs SHA-256 (secure)
+6. **Storage Sizes**: UUID (16B) < BYTEA (20B) < TEXT (36B)
 
 **Best Practices:**
 
-- ✅ Gunakan BYTEA untuk checksums dan hashes
+- ✅ Gunakan UUID untuk MD5/128-bit hashes (smallest & fastest!)
+- ✅ Gunakan BYTEA untuk flexibility (SHA-256, arbitrary binary)
 - ✅ Store large files di file storage (S3, R2, Tigris)
 - ✅ Simpan metadata dan pointers di database
-- ✅ Gunakan UUID type untuk menyimpan MD5/hash (most efficient)
 - ✅ Set `bytea_output = 'hex'` untuk consistency
 - ❌ Jangan store files > 1MB di database
 - ❌ Jangan gunakan MD5 untuk security (use SHA-256+)
+- ❌ Jangan gunakan TEXT untuk hashes (wasteful!)
 
-**Storage Efficiency untuk Hashes:**
+**Storage Efficiency untuk MD5 Hashes (VERIFIED!):**
 
 ```
-TEXT (MD5 string):    36 bytes  ❌
-BYTEA (decoded):      20 bytes  ⚠️
-UUID (MD5 cast):      16 bytes  ✅ BEST!
+UUID (MD5 cast):          16 bytes  ✅ SMALLEST & BEST!
+    - Fixed-size type
+    - No varlena overhead
+    - Native PostgreSQL optimization
+    - Best index performance
+
+BYTEA (decoded):          20 bytes  ✅ Flexible
+    - Variable-length type
+    - 4 bytes varlena overhead
+    - Works with any hash size
+
+TEXT (hex string):        36 bytes  ❌ WASTEFUL
+    - Variable-length type
+    - 4 bytes varlena overhead
+    - 32 bytes for hex representation
+    - Only use when human-readability is critical
 ```
-
-**Decision Guide:**
-
-- Need security → SHA-256 (BYTEA)
-- Need speed & deduplication → MD5 → UUID
-- Need to store files → S3 + pointer (TEXT)
-- Need checksums → MD5/SHA-256 → UUID
-
-**Key takeaway:** BYTEA adalah tool yang powerful untuk binary data, tapi harus digunakan dengan bijak. Untuk large files, selalu gunakan dedicated file storage. Untuk hashes dan checksums, UUID type memberikan best balance antara storage efficiency dan usability. Remember: MD5 is fast but NOT secure - use only for non-cryptographic purposes!
