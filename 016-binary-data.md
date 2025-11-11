@@ -174,7 +174,7 @@ CREATE TABLE user_uploads (
 );
 
 -- Masalah:
--- 1. Database bloat
+-- 1. Database bengkak
 -- 2. Backup lambat
 -- 3. Replication overhead
 -- 4. Memory pressure saat query
@@ -384,9 +384,9 @@ SELECT
 ```
 MD5 output:     3e25960a79dbc69b674cd4ec67a72c62
 UUID format:    3e25960a-79db-c69b-674c-d4ec67a72c62
-                └──┬──┘ └─┬┘ └─┬┘ └─┬┘ └────┬────┘
-                   │     │    │    │       │
-              8 chars 4   4    4    12 chars
+                └──┬───┘ └─┬┘ └─┬┘ └─┬┘ └────┬─────┘
+                   │       │    │    │       │
+                8 chars    4    4    4    12 chars
 
 Storage: Fixed 16 bytes (paling efficient!)
 Display: Formatted dengan dashes (readable!)
