@@ -179,70 +179,7 @@ SELECT pg_column_size(25::INT8);  -- 8 bytes
 SELECT pg_column_size(25::INT2);  -- 2 bytes
 ```
 
-## 4. Catatan Tambahan / Insight
-
-### Tips Praktis:
-
-1. **Pilih Tipe Terkecil yang Cukup:**
-
-   - Jangan default ke `BIGINT` untuk semua integer
-   - Pertimbangkan range data yang mungkin
-   - Gunakan `pg_column_size()` untuk membandingkan
-
-2. **Untuk Tabel Besar:**
-
-   - Perbedaan 2-4 bytes per kolom × jutaan rows = signifikan!
-   - Contoh: 10 juta rows × 6 bytes saved = 60 MB saved per kolom
-
-3. **Debugging Workflow:**
-
-   ```sql
-   -- Langkah 1: Lihat hasilnya
-   SELECT my_function();
-
-   -- Langkah 2: Cek tipe datanya
-   SELECT pg_typeof(my_function());
-
-   -- Langkah 3: Cek ukurannya
-   SELECT pg_column_size(my_function());
-   ```
-
-4. **Decorated Literal:**
-   - Jarang digunakan, tidak perlu dihafal
-   - Jika menemukannya di code orang lain, Anda sekarang tahu apa itu
-   - Lebih baik tetap gunakan casting biasa untuk konsistensi
-
-### Analogi:
-
-**Pemilihan Tipe Data seperti Memilih Kardus:**
-
-- Data Anda = Barang yang mau dikirim
-- Tipe Data = Ukuran kardus
-- `INT2` = Kardus kecil (murah, efisien untuk barang kecil)
-- `INT8` = Kardus besar (mahal, pemborosan untuk barang kecil)
-- `NUMERIC` = Kardus yang bisa mengembang sesuai isi
-
-Anda tidak akan pakai kardus besar untuk mengirim cincin, kan? Sama halnya, jangan pakai `BIGINT` untuk menyimpan umur!
-
-### Peringatan:
-
-```sql
--- JANGAN lakukan ini:
-CREATE TABLE products (
-    id BIGINT,           -- Overkill untuk ID < 2 miliar
-    quantity BIGINT,     -- Overkill untuk stok < 32,767
-    price NUMERIC        -- Tanpa constraint, bisa jadi sangat besar
-);
-
--- LEBIH BAIK:
-CREATE TABLE products (
-    id INT,              -- Cukup sampai 2.1 miliar
-    quantity INT2,       -- Cukup sampai 32,767
-    price NUMERIC(10,2)  -- Max 99,999,999.99
-);
-```
-
-## 5. Kesimpulan
+## 4. Kesimpulan
 
 Casting di PostgreSQL bisa dilakukan dengan tiga cara: syntax PostgreSQL (`::`, ringkas), SQL Standard (`CAST`, portable), dan decorated literal (jarang). Untuk debugging dan optimasi, PostgreSQL menyediakan fungsi utility:
 

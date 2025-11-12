@@ -201,47 +201,6 @@ CREATE TABLE orders (
    - Simple: Maintenance mudah
    - Representative: Menghindari bug, meningkatkan performa
 
-## 4. Catatan Tambahan / Insight
-
-### 💡 Tips Praktis:
-
-1. **Jangan terlalu ekstrem dalam "menghemat space"**
-
-   - ❌ Jangan sampai memotong atau memanipulasi data hanya demi hemat bytes
-   - ✅ Fokus pada memilih tipe data yang **sesuai dengan domain bisnis**
-
-2. **Pahami "universe of possibilities"**
-
-   - Pelajari semua tipe data yang tersedia di PostgreSQL
-   - Bandingkan dengan karakteristik data Anda
-   - Pilih yang paling cocok
-
-3. **Schema yang baik = investasi jangka panjang**
-   - Lebih mudah diubah di awal daripada setelah production
-   - Schema yang tepat memudahkan skalabilitas
-   - Pengaruhnya terasa saat indexing dan optimasi query
-
-### ⚠️ Kesalahan Umum:
-
-1. **Menyimpan semua angka sebagai BIGINT "biar aman"**
-
-   - Pemborosan space dan performa
-
-2. **Menggunakan TEXT untuk semua hal**
-
-   - Kehilangan validasi dan optimasi bawaan PostgreSQL
-
-3. **Tidak mempertimbangkan batasan domain**
-   - Contoh: Menyimpan nilai persentase dengan INTEGER tanpa CHECK constraint
-
-### 🎯 Analogi:
-
-Memilih tipe data seperti **memilih wadah untuk menyimpan barang**:
-
-- Jangan simpan 1 permen dalam kardus besar (BIGINT untuk nilai 0-100)
-- Jangan paksa simpan TV dalam kotak sepatu (TEXT untuk data kompleks)
-- Pilih wadah yang **pas**: melindungi isinya, efisien, dan jelas fungsinya
-
 ## 5. Kesimpulan
 
 PostgreSQL memiliki struktur hierarki yang lebih kompleks (Server → Database → **Schema** → Tables) dibanding database lain. Kata "schema" sendiri memiliki dua makna: sebagai namespace organizer dan sebagai definisi struktur table.

@@ -96,39 +96,7 @@ SELECT POWER('NaN'::NUMERIC, 0);  -- 1
 - **Dalam operasi matematika**, NaN cenderung "menginfeksi" hasil perhitungan (operasi apapun dengan NaN menghasilkan NaN), kecuali kasus khusus seperti pangkat nol
 - **Infinity lebih stabil** dalam operasi matematika dan mengikuti logika matematika (infinity ± bilangan finite tetap infinity)
 
-## 4. Catatan Tambahan / Insight
-
-### Tips Praktis:
-
-1. **Kapan menggunakan Infinity:**
-
-   - Saat membutuhkan nilai yang sangat besar atau sangat kecil tanpa batas pasti
-   - Sebagai placeholder untuk "tidak terbatas" dalam model data
-   - Dalam constraint atau validasi untuk mewakili "tanpa batas atas/bawah"
-
-2. **Kapan menggunakan NaN:**
-
-   - Use case untuk NaN kurang jelas dalam praktik
-   - Lebih sering muncul sebagai hasil dari operasi yang invalid (seperti `infinity - infinity`)
-   - Bisa berguna untuk menandai perhitungan yang gagal tanpa menggunakan NULL
-
-3. **Perbedaan dengan NULL:**
-
-   - NULL berarti "tidak ada nilai"
-   - NaN berarti "nilai ada, tetapi bukan angka valid"
-   - Infinity berarti "nilai ada dan sangat besar/kecil tanpa batas"
-
-4. **Sorting behavior:**
-   - NaN dianggap lebih besar dari nilai manapun termasuk infinity
-   - Order: `-infinity < ... angka ... < infinity < NaN`
-
-### Analogi:
-
-- **NaN** seperti hasil dari pembagian 0/0 - secara matematis tidak terdefinisi
-- **Infinity** seperti garis yang tidak pernah berakhir - konsep yang valid secara matematis
-- **Integer** seperti kotak dengan ukuran tetap - tidak bisa menampung "tidak terbatas"
-
-## 5. Kesimpulan
+## 4. Kesimpulan
 
 NaN dan Infinity adalah nilai-nilai spesial dalam PostgreSQL yang hanya tersedia pada tipe data `NUMERIC` (tanpa precision/scale) dan `FLOAT`. Nilai-nilai ini tidak tersedia pada `INTEGER` atau `NUMERIC` dengan range yang ditentukan.
 

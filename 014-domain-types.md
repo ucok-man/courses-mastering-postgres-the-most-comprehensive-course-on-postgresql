@@ -1,4 +1,4 @@
-# 📝 Domain Types di PostgreSQL
+# 📝 Domain Types di PostgreSQL (VERSI TERKOREKSI)
 
 ## 1. Ringkasan Singkat
 
@@ -42,6 +42,18 @@ CREATE TABLE invoices (
 Domain = Base Type + Check Constraint(s) + Custom Name
 ```
 
+**⚠️ KOREKSI: Domain CAN be based on another domain!**
+
+```sql
+-- Base domain
+CREATE DOMAIN positive_number AS NUMERIC CHECK (VALUE > 0);
+
+-- Domain based on another domain (derived domain)
+CREATE DOMAIN price AS positive_number CHECK (VALUE < 1000000);
+
+-- This is VALID in PostgreSQL!
+```
+
 ### b. Syntax Membuat Domain
 
 ```sql
@@ -53,7 +65,7 @@ CREATE DOMAIN domain_name AS base_type
 **Komponen:**
 
 - `domain_name`: Nama custom type yang akan dibuat
-- `base_type`: Tipe data underlying (TEXT, INTEGER, NUMERIC, dll)
+- `base_type`: Tipe data underlying (TEXT, INTEGER, NUMERIC, dll) - **BISA juga domain lain!**
 - `VALUE`: Keyword khusus yang mereferensi nilai yang sedang divalidasi
 - `CHECK`: Constraint yang harus dipenuhi
 
@@ -108,7 +120,7 @@ CREATE DOMAIN us_postal_code AS TEXT
 CREATE TABLE addresses (
     street TEXT,
     city TEXT,
-    postal us_postal_code NOT NULL  -- Domain + NOT NULL
+    postal us_postal_code NOT NULL  -- Domain + NOT NULL di KOLOM (best practice!)
 );
 ```
 
@@ -172,14 +184,16 @@ CREATE TABLE users (
 
 ### e. Domain vs Check Constraint
 
-| Aspek               | Domain                       | Check Constraint                   |
-| ------------------- | ---------------------------- | ---------------------------------- |
-| **Reusability**     | ✅ Bisa dipakai berkali-kali | ❌ Harus ditulis ulang             |
-| **Multi-column**    | ❌ Hanya single column       | ✅ Bisa reference multiple columns |
-| **Modification**    | ✅ Bisa ALTER                | ❌ Harus DROP dan RECREATE         |
-| **Gradual rollout** | ✅ Bisa NOT VALIDATED        | ❌ Tidak ada fitur ini             |
-| **Encapsulation**   | ✅ Type + constraint bundled | ❌ Terpisah                        |
-| **Komunikasi**      | ✅ Nama yang meaningful      | ⚠️ Tergantung naming               |
+| Aspek                  | Domain                       | Check Constraint                   |
+| ---------------------- | ---------------------------- | ---------------------------------- |
+| **Reusability**        | ✅ Bisa dipakai berkali-kali | ❌ Harus ditulis ulang             |
+| **Multi-column**       | ❌ Hanya single column       | ✅ Bisa reference multiple columns |
+| **Modification**       | ✅ Bisa ALTER                | ❌ Harus DROP dan RECREATE         |
+| **Gradual rollout**    | ✅ Bisa NOT VALIDATED        | ❌ Tidak ada fitur ini             |
+| **Encapsulation**      | ✅ Type + constraint bundled | ❌ Terpisah                        |
+| **Komunikasi**         | ✅ Nama yang meaningful      | ⚠️ Tergantung naming               |
+| **Container types**    | ⚠️ Limitation untuk ALTER    | ✅ No special limitation           |
+| **Automatic downcast** | ⚠️ Ya, ke base type          | ❌ N/A                             |
 
 **Contoh Perbandingan:**
 
@@ -289,6 +303,9 @@ ALTER DOMAIN us_postal_code
     CHECK (VALUE ~ '^\d{5}$' OR VALUE ~ '^\d{5}-\d{4}$')
     NOT VALIDATED;
 
+-- ⚠️ PENTING: NOT VALIDATED tidak bulletproof!
+-- Tidak bisa "see" rows yang sedang di-insert/update concurrent transactions
+
 -- Sekarang:
 -- - Data baru HARUS memenuhi constraint baru
 -- - Data lama boleh tidak memenuhi (sementara)
@@ -304,17 +321,48 @@ UPDATE addresses SET postal = '12345' WHERE postal = 'invalid_old_data';
 ALTER DOMAIN us_postal_code VALIDATE CONSTRAINT extended_format;
 ```
 
+**⚠️ KOREKSI PENTING: Race Condition Risk**
+
+Dokumentasi resmi memperingatkan:
+
+- `ALTER DOMAIN ADD CONSTRAINT` **tidak bulletproof**
+- Command tidak bisa "see" rows yang baru di-insert/update dalam uncommitted transactions
+- Jika ada concurrent operations, bisa ada bad data masuk
+
+**Safe Workflow:**
+
+```sql
+-- 1. Add constraint dengan NOT VALID
+ALTER DOMAIN us_postal_code
+    ADD CONSTRAINT extended_format
+    CHECK (VALUE ~ '^\d{5}$' OR VALUE ~ '^\d{5}-\d{4}$')
+    NOT VALID;
+
+-- 2. COMMIT
+COMMIT;
+
+-- 3. TUNGGU semua transactions sebelum commit selesai
+-- (Monitor dengan pg_stat_activity)
+
+-- 4. VALIDATE constraint (akan check semua data existing)
+ALTER DOMAIN us_postal_code VALIDATE CONSTRAINT extended_format;
+```
+
 **Workflow Gradual Migration:**
 
 ```
 1. ALTER DOMAIN dengan NOT VALIDATED
    ↓
-2. Data baru: Langsung divalidasi dengan rule baru
+2. COMMIT transaction
+   ↓
+3. Tunggu old transactions finish
+   ↓
+4. Data baru: Langsung divalidasi dengan rule baru
    Data lama: Tidak di-touch, masih boleh invalid
    ↓
-3. Perlahan migrate/fix data lama
+5. Perlahan migrate/fix data lama
    ↓
-4. VALIDATE CONSTRAINT untuk enforce ke semua data
+6. VALIDATE CONSTRAINT untuk enforce ke semua data
 ```
 
 **Perbandingan dengan Check Constraint:**
@@ -329,11 +377,110 @@ ALTER TABLE products ADD CHECK (price > 0);
 ALTER DOMAIN positive_amount
     ADD CHECK (VALUE > 0)
     NOT VALIDATED;
--- Data lama: Tidak di-check
+-- Data lama: Tidak di-check (dengan caveat race condition)
 -- Data baru: Divalidasi
 ```
 
-### h. Keuntungan Domain
+### h. Automatic Type Downcast - Behavior Penting!
+
+**⚠️ PENAMBAHAN: Behavior yang sering tidak disadari**
+
+Ketika operator atau function dari underlying type diaplikasikan ke domain value, PostgreSQL **automatically downcast** ke underlying type.
+
+```sql
+CREATE DOMAIN posint AS INTEGER CHECK (VALUE > 0);
+
+CREATE TABLE mytable (id posint);
+INSERT INTO mytable VALUES (5);
+
+-- Query ini menghasilkan INTEGER, BUKAN posint!
+SELECT id - 1 FROM mytable;  -- Hasil: INTEGER (bukan posint)
+
+-- Implikasi: Constraint TIDAK di-check ulang!
+SELECT (id - 1) FROM mytable WHERE id = 1;
+-- Hasil: 0 (INTEGER) - constraint VALUE > 0 TIDAK di-check!
+
+-- Untuk re-check constraint, harus explicit cast:
+SELECT (id - 1)::posint FROM mytable WHERE id = 1;
+-- ERROR: value for domain posint violates check constraint
+```
+
+**Mengapa ini penting?**
+
+```sql
+CREATE DOMAIN email AS TEXT CHECK (VALUE LIKE '%@%');
+
+CREATE TABLE users (
+    user_email email
+);
+
+-- Substring operation: Downcast ke TEXT
+SELECT substring(user_email, 1, 5) FROM users;
+-- Hasil: TEXT (bukan email)
+-- Constraint email TIDAK berlaku lagi!
+
+-- Ini bisa diassign ke kolom TEXT tanpa validasi
+CREATE TEMP TABLE temp AS
+    SELECT substring(user_email, 1, 5) AS partial FROM users;
+-- partial adalah TEXT, bukan email
+```
+
+### i. Container Type Limitations - PENTING!
+
+**⚠️ PENAMBAHAN: Limitation yang harus diketahui**
+
+`ALTER DOMAIN ADD CONSTRAINT`, `VALIDATE CONSTRAINT`, dan `SET NOT NULL` akan **GAGAL** jika domain (atau derived domain) digunakan dalam:
+
+- **Composite type column** (row type)
+- **Array column**
+- **Range column**
+
+```sql
+-- Contoh yang akan GAGAL:
+CREATE DOMAIN posint AS INTEGER CHECK (VALUE > 0);
+
+-- Domain dalam composite type
+CREATE TYPE address_type AS (
+    street TEXT,
+    zipcode posint  -- Domain dalam composite
+);
+
+CREATE TABLE locations (
+    location address_type
+);
+
+-- INI AKAN GAGAL:
+ALTER DOMAIN posint ADD CONSTRAINT max_val CHECK (VALUE < 1000);
+-- ERROR: cannot alter type "posint" because column "locations.location" uses it
+
+-- Domain dalam array
+CREATE TABLE numbers (
+    values posint[]  -- Array of domain
+);
+
+-- INI JUGA AKAN GAGAL:
+ALTER DOMAIN posint SET NOT NULL;
+-- ERROR: cannot alter type "posint" because it is used in array type
+```
+
+**Workaround:**
+
+```sql
+-- Jika perlu ALTER domain dalam container type:
+-- 1. Backup data
+-- 2. Drop tables/columns yang pakai container type
+-- 3. ALTER domain
+-- 4. Recreate tables/columns
+-- 5. Restore data
+
+-- Atau: Gunakan base type + check constraint untuk container types
+CREATE TABLE locations (
+    street TEXT,
+    zipcode INTEGER CHECK (zipcode > 0)  -- Bukan domain jika dalam container
+);
+```
+
+### j. Keuntungan Domain
 
 #### 1. Reusability dan Konsistensi
 
@@ -420,6 +567,10 @@ Level 2: Check Constraints
 Level 3: Domains
     CREATE DOMAIN positive_price AS NUMERIC CHECK (VALUE > 0)
     ↓ (Reusable, maintainable)
+
+Level 4: Derived Domains
+    CREATE DOMAIN limited_price AS positive_price CHECK (VALUE < 1000)
+    ↓ (Layered validation)
 ```
 
 ### Domain dalam Ekosistem PostgreSQL:
@@ -428,8 +579,12 @@ Level 3: Domains
 Base Types (INT, TEXT, etc)
     ↓ wrapped by
 Domains (custom types with validation)
+    ↓ can be base for
+Other Domains (derived domains)
     ↓ used in
-Tables & Columns
+Tables & Columns (but NOT container types for ALTER)
+    ↓ downcast to base type when
+Operations/Functions applied
     ↓ protected by
 Check Constraints (for multi-column rules)
     ↓ ensures
@@ -442,8 +597,11 @@ Data Integrity
 Single column, used once
     → Check Constraint inline
 
-Single column, used multiple times
+Single column, used multiple times, NOT in container types
     → Domain
+
+Single column IN container types (composite, array, range)
+    → Base type + Check Constraint (easier to maintain)
 
 Multiple columns relationship
     → Table-level Check Constraint
@@ -476,279 +634,7 @@ CREATE TABLE orders (
 );
 ```
 
-## 4. Catatan Tambahan / Insight
-
-### Tips Praktis:
-
-1. **Naming Convention untuk Domain:**
-
-   ```sql
-   -- Good: Descriptive dan menunjukkan purpose
-   CREATE DOMAIN email AS TEXT CHECK (...);
-   CREATE DOMAIN us_postal_code AS TEXT CHECK (...);
-   CREATE DOMAIN positive_amount AS NUMERIC CHECK (...);
-   CREATE DOMAIN percentage AS NUMERIC CHECK (...);
-
-   -- Avoid: Terlalu generic
-   CREATE DOMAIN text_field AS TEXT CHECK (...);  -- Kurang spesifik
-   CREATE DOMAIN number_type AS NUMERIC CHECK (...);  -- Kurang jelas
-   ```
-
-2. **Common Domain Patterns:**
-
-   ```sql
-   -- Email (simple validation)
-   CREATE DOMAIN email AS TEXT
-       CHECK (VALUE ~ '^[^@]+@[^@]+\.[^@]+$');
-
-   -- Phone Indonesia
-   CREATE DOMAIN phone_id AS TEXT
-       CHECK (VALUE ~ '^(\+62|62|0)[0-9]{9,12}$');
-
-   -- URL
-   CREATE DOMAIN url AS TEXT
-       CHECK (VALUE ~ '^https?://[^\s]+$');
-
-   -- Currency amount (2 decimal places)
-   CREATE DOMAIN currency AS NUMERIC(12, 2)
-       CHECK (VALUE >= 0);
-
-   -- Percentage (0-100)
-   CREATE DOMAIN percentage AS NUMERIC(5, 2)
-       CHECK (VALUE BETWEEN 0 AND 100);
-
-   -- Year (reasonable range)
-   CREATE DOMAIN year AS INTEGER
-       CHECK (VALUE BETWEEN 1900 AND 2100);
-
-   -- Rating (1-5 stars)
-   CREATE DOMAIN star_rating AS INTEGER
-       CHECK (VALUE BETWEEN 1 AND 5);
-   ```
-
-3. **Domain dengan Multiple Constraints:**
-
-   ```sql
-   CREATE DOMAIN username AS TEXT
-       CONSTRAINT min_length CHECK (length(VALUE) >= 3)
-       CONSTRAINT max_length CHECK (length(VALUE) <= 20)
-       CONSTRAINT valid_chars CHECK (VALUE ~ '^[a-zA-Z0-9_]+$');
-
-   -- Bisa drop/add individual constraints
-   ALTER DOMAIN username DROP CONSTRAINT min_length;
-   ALTER DOMAIN username ADD CONSTRAINT min_length CHECK (length(VALUE) >= 5);
-   ```
-
-4. **Domain dengan Default Values:**
-
-   ```sql
-   -- Domain bisa punya default
-   CREATE DOMAIN status_code AS TEXT
-       DEFAULT 'pending'
-       CHECK (VALUE IN ('pending', 'approved', 'rejected'));
-
-   CREATE TABLE applications (
-       id SERIAL PRIMARY KEY,
-       status status_code  -- Default 'pending' dari domain
-   );
-   ```
-
-5. **Listing All Domains:**
-
-   ```sql
-   -- Lihat semua domain di database
-   SELECT
-       n.nspname AS schema,
-       t.typname AS domain_name,
-       pg_catalog.format_type(t.typbasetype, t.typtypmod) AS base_type
-   FROM pg_catalog.pg_type t
-   JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-   WHERE t.typtype = 'd'
-   ORDER BY 1, 2;
-
-   -- Lihat constraints dalam domain
-   \dD+ domain_name  -- Di psql
-   ```
-
-### Kesalahan Umum:
-
-```sql
--- ❌ KESALAHAN 1: Mencoba reference multiple values
-CREATE DOMAIN price_discount AS NUMERIC
-    CHECK (VALUE > discount_value);  -- ERROR: discount_value tidak ada
--- Fix: Pakai check constraint untuk multi-column
-
--- ❌ KESALAHAN 2: Terlalu strict saat awal
-CREATE DOMAIN email AS TEXT
-    CHECK (VALUE ~ '^[a-z]+@[a-z]+\.com$');  -- Terlalu ketat!
--- Masalah: Tidak terima uppercase, subdomain, TLD selain .com
--- Fix: Buat regex yang lebih permissive atau update gradually
-
--- ❌ KESALAHAN 3: Lupa NOT NULL
-CREATE DOMAIN positive_amount AS NUMERIC CHECK (VALUE > 0);
-
-CREATE TABLE orders (
-    price positive_amount  -- Masih bisa NULL!
-);
-INSERT INTO orders VALUES (NULL);  -- ✅ Berhasil!
-
--- Fix: Tambahkan NOT NULL di kolom atau domain
-CREATE DOMAIN positive_amount AS NUMERIC
-    NOT NULL
-    CHECK (VALUE > 0);
-
--- ❌ KESALAHAN 4: Regex tanpa anchor
-CREATE DOMAIN us_postal_code AS TEXT
-    CHECK (VALUE ~ '\d{5}');  -- Tanpa ^ dan $
--- Masalah: '12345-INVALID-6789' akan lolos! (karena ada 5 digit di tengah)
--- Fix: Selalu pakai ^ dan $
-CREATE DOMAIN us_postal_code AS TEXT
-    CHECK (VALUE ~ '^\d{5}(-\d{4})?$');
-
--- ❌ KESALAHAN 5: Tidak pakai constraint name
-CREATE DOMAIN email AS TEXT
-    CHECK (VALUE LIKE '%@%');  -- Unnamed constraint
--- Fix: Beri nama untuk debugging
-CREATE DOMAIN email AS TEXT
-    CONSTRAINT valid_format CHECK (VALUE LIKE '%@%');
-```
-
-### Advanced Patterns:
-
-```sql
--- Pattern 1: Domain hierarchy (base domain + extended domain)
-CREATE DOMAIN positive_number AS NUMERIC CHECK (VALUE > 0);
-
--- Pakai positive_number dalam domain lain? TIDAK BISA!
--- Domain tidak bisa inherit domain lain di PostgreSQL
--- Tapi bisa copy pattern:
-
-CREATE DOMAIN price AS NUMERIC
-    CHECK (VALUE > 0 AND VALUE < 1000000);  -- Copy + extend logic
-
--- Pattern 2: Domain untuk Enum alternative
-CREATE DOMAIN order_status AS TEXT
-    CHECK (VALUE IN ('pending', 'processing', 'shipped', 'delivered', 'cancelled'));
-
--- Lebih fleksibel dari ENUM type karena bisa ALTER
-
--- Pattern 3: Composite validation
-CREATE DOMAIN secure_password AS TEXT
-    CONSTRAINT min_length CHECK (length(VALUE) >= 8)
-    CONSTRAINT has_uppercase CHECK (VALUE ~ '[A-Z]')
-    CONSTRAINT has_lowercase CHECK (VALUE ~ '[a-z]')
-    CONSTRAINT has_number CHECK (VALUE ~ '[0-9]');
-
--- Pattern 4: Country-specific domains
-CREATE DOMAIN us_postal_code AS TEXT
-    CHECK (VALUE ~ '^\d{5}(-\d{4})?$');
-
-CREATE DOMAIN uk_postal_code AS TEXT
-    CHECK (VALUE ~ '^[A-Z]{1,2}[0-9]{1,2} [0-9][A-Z]{2}$');
-
-CREATE DOMAIN id_postal_code AS TEXT
-    CHECK (VALUE ~ '^\d{5}$');
-
--- Gunakan sesuai region
-CREATE TABLE addresses (
-    country TEXT,
-    postal_us us_postal_code,
-    postal_uk uk_postal_code,
-    postal_id id_postal_code,
-    CHECK (
-        (country = 'US' AND postal_us IS NOT NULL) OR
-        (country = 'UK' AND postal_uk IS NOT NULL) OR
-        (country = 'ID' AND postal_id IS NOT NULL)
-    )
-);
-```
-
-### Migration Strategy:
-
-```sql
--- Scenario: Migrate dari check constraint ke domain
-
--- Step 1: Buat domain
-CREATE DOMAIN email AS TEXT
-    CHECK (VALUE ~ '^[^@]+@[^@]+\.[^@]+$');
-
--- Step 2: Buat kolom baru dengan domain
-ALTER TABLE users ADD COLUMN new_email email;
-
--- Step 3: Copy data
-UPDATE users SET new_email = old_email;
-
--- Step 4: Drop kolom lama
-ALTER TABLE users DROP COLUMN old_email;
-
--- Step 5: Rename kolom baru
-ALTER TABLE users RENAME COLUMN new_email TO email;
-
--- Alternative: Jika bisa downtime
-ALTER TABLE users
-    ALTER COLUMN email TYPE email USING email::email;
--- Tapi ini bisa lambat untuk table besar!
-```
-
-### Performance Considerations:
-
-```sql
--- Domain check dijalankan setiap INSERT/UPDATE
-CREATE DOMAIN complex_validation AS TEXT
-    CHECK (
-        length(VALUE) > 5 AND
-        VALUE ~ '[A-Z]' AND
-        VALUE ~ '[a-z]' AND
-        VALUE ~ '[0-9]' AND
-        VALUE !~ '[^A-Za-z0-9]'
-    );
-
--- Untuk table dengan insert frequency tinggi, pertimbangkan:
--- 1. Simplify validation
--- 2. Move complex logic ke application
--- 3. Use trigger untuk async validation
-
--- Benchmark:
--- Simple check (VALUE > 0): ~0.001ms overhead
--- Regex check: ~0.1ms overhead
--- Complex multi-check: ~1ms overhead
--- Multiply by jutaan rows → bisa signifikan!
-```
-
-### Analogi:
-
-**Domain seperti Template atau Blueprint:**
-
-- **Check Constraint** = Aturan custom di setiap rumah
-
-  - Setiap rumah tulis aturannya sendiri
-  - Tidak konsisten
-  - Sulit update kalau rule berubah
-
-- **Domain** = Building code yang dipakai semua rumah
-  - Define sekali, pakai berkali-kali
-  - Konsisten di semua tempat
-  - Update building code → semua rumah otomatis update
-
-**Domain seperti Fungsi Reusable:**
-
-```python
-# Tanpa domain (seperti copy-paste code)
-def validate_email_in_users(email):
-    if '@' not in email: raise Error
-
-def validate_email_in_contacts(email):
-    if '@' not in email: raise Error  # Duplikasi!
-
-# Dengan domain (seperti shared function)
-def validate_email(email):
-    if '@' not in email: raise Error
-
-validate_email(users.email)
-validate_email(contacts.email)  # Reuse!
-```
-
-## 5. Kesimpulan
+## 4. Kesimpulan
 
 Domain Types adalah fitur powerful PostgreSQL yang mengenkapsulasi tipe data dan check constraints menjadi custom type yang reusable. Domain mengatasi masalah duplikasi check constraint dan meningkatkan konsistensi validasi di seluruh database.
 
@@ -781,3 +667,7 @@ Domain Types adalah fitur powerful PostgreSQL yang mengenkapsulasi tipe data dan
 - Dokumentasikan domain di schema documentation
 
 **Key takeaway:** Domain adalah abstraksi yang meningkatkan reusability, maintainability, dan konsistensi validasi data. Mereka adalah "DRY principle" untuk database constraints - Define once, use everywhere, maintain easily.
+
+```
+
+```
