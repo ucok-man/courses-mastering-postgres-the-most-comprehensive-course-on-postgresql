@@ -88,19 +88,27 @@ SELECT
 
 **⚠️ WARNING: Rounding vs Truncating**
 
-Fractional precision melakukan **ROUNDING**, bukan truncating:
+Fractional precision melakukan **ROUNDING** (pembulatan standar), bukan truncating:
 
 ```sql
+-- Rounding mengikuti aturan standar: >= 0.5 dibulatkan ke atas, < 0.5 ke bawah
 SELECT
-    now() AS original,                    -- 13:01:01.923456
-    now()::TIMESTAMPTZ(0) AS rounded,     -- 13:01:02 (dibulatkan ke atas!)
-    date_trunc('second', now()) AS truncated;  -- 13:01:01 (dipotong ke bawah)
+    '13:01:01.499999'::TIMESTAMPTZ(0) AS rounded_down,  -- 13:01:01 (< 0.5, rounded down)
+    '13:01:01.500000'::TIMESTAMPTZ(0) AS rounded_up,    -- 13:01:02 (>= 0.5, rounded up)
+    '13:01:01.923456'::TIMESTAMPTZ(0) AS rounded_up2;   -- 13:01:02 (>= 0.5, rounded up)
+
+-- Bandingkan dengan date_trunc yang selalu truncate (potong ke bawah)
+SELECT
+    now() AS original,                         -- 13:01:01.923456
+    now()::TIMESTAMPTZ(0) AS rounded,          -- 13:01:02 (rounded using standard rounding)
+    date_trunc('second', now()) AS truncated;  -- 13:01:01 (always truncated down)
 ```
 
 **Implikasi:**
 
-- `TIMESTAMPTZ(0)` bisa menghasilkan timestamp **di masa depan** (jika rounded up)
-- Jika butuh truncate (potong), gunakan `date_trunc('second', value)`
+- `TIMESTAMPTZ(0)` menggunakan pembulatan standar: nilai ≥ 0.5 detik akan dibulatkan ke atas
+- Jika butuh truncate (potong ke bawah), gunakan `date_trunc('second', value)`
+- **PENTING:** Rounding bisa menghasilkan timestamp **di masa depan** jika fractional seconds ≥ 0.5
 
 **Kapan ini masalah:**
 
@@ -108,12 +116,13 @@ SELECT
 -- Bisa bermasalah untuk audit/logging
 INSERT INTO audit_log (action_time)
 VALUES (now()::TIMESTAMPTZ(0));
--- Jika now() = 10:30:59.8, akan tersimpan: 10:31:00 (masa depan!)
+-- Jika now() = 10:30:59.6, akan tersimpan: 10:31:00 (masa depan!)
+-- Jika now() = 10:30:59.4, akan tersimpan: 10:30:59 (masa lalu)
 
--- Solusi: gunakan date_trunc
+-- Solusi: gunakan date_trunc untuk konsistensi (selalu truncate)
 INSERT INTO audit_log (action_time)
 VALUES (date_trunc('second', now()));
--- Akan tersimpan: 10:30:59 (masa lalu, lebih aman)
+-- Akan tersimpan: 10:30:59 (selalu masa lalu atau sekarang, lebih aman untuk audit)
 ```
 
 ### c. Format Input: ISO 8601 (RECOMMENDED!)
