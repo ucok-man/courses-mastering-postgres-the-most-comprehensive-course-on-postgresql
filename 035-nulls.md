@@ -8,45 +8,112 @@ Video ini membahas tentang constraint NOT NULL di PostgreSQL, dengan penekanan p
 
 ### a. Karakteristik Khusus NULL
 
-NULL memiliki sifat yang "aneh" (weird) dibandingkan nilai lainnya:
+#### Memahami sifat unik dari NULL
 
-- **NULL bukan nilai kosong biasa**: NULL ≠ 0, NULL ≠ false, NULL ≠ empty string, NULL ≠ empty
-- **NULL adalah "unknown value"**: Nilai yang tidak diketahui atau tidak dapat diketahui
+Dalam SQL, `NULL` adalah nilai yang sering membingungkan karena memiliki karakteristik yang berbeda dari nilai biasa. Banyak orang mengira bahwa `NULL` adalah “kosong” atau “nol”, padahal itu tidak benar. `NULL` mewakili sesuatu yang _tidak diketahui_, sehingga database tidak bisa memperlakukannya seperti angka, string, atau boolean.
 
-**Analogi perbandingan dengan NULL:**
+Untuk memperjelas, berikut beberapa sifat pentingnya:
 
-Ketika database diminta membandingkan sesuatu dengan NULL, seperti:
+- `NULL` **bukan angka nol** (`0`)
+- `NULL` **bukan false**
+- `NULL` **bukan string kosong** (`""`)
+- `NULL` **bukan nilai kosong** seperti array atau objek tanpa isi
+- `NULL` benar-benar berarti: _nilai ini tidak diketahui atau tidak ada informasinya_
+
+Dengan kata lain, **NULL menyatakan “unknown value”**, bukan “nothing” dalam arti teknis.
+
+#### Bagaimana perbandingan terhadap NULL bekerja
+
+Salah satu hal yang sering mengejutkan adalah hasil operasi perbandingan dengan `NULL`. Misalnya:
 
 ```sql
 SELECT 1 = NULL;  -- Hasilnya bukan TRUE atau FALSE, tapi NULL (unknown)
 ```
 
-Ini seperti bertanya: "Apakah angka 1 sama dengan benda rahasia yang saya sembunyikan di tangan?"
+Ketika SQL diminta membandingkan sebuah nilai yang jelas (`1`) dengan sesuatu yang tidak diketahui (`NULL`), database tidak bisa mengambil keputusan apakah keduanya sama atau tidak. Karena tidak ada informasi tentang nilai sebenarnya di sisi kanan, hasilnya adalah `NULL`.
 
-Database hanya bisa menjawab: "Saya tidak tahu apa yang Anda sembunyikan, jadi saya tidak bisa membandingkannya."
+Analogi sederhananya seperti ini:
+Bayangkan Anda memegang sebuah angka di tangan, tetapi saya tidak boleh melihatnya. Jika saya bertanya, “Apakah angka itu sama dengan 1?”, Anda tidak bisa menjawab _ya_ atau _tidak_, karena saya tidak tahu apa yang Anda sembunyikan. Satu-satunya jawaban yang mungkin adalah:
+“Saya tidak tahu.”
+Itulah yang terjadi ketika SQL melakukan perbandingan dengan `NULL`.
 
-**Cara yang benar untuk memeriksa NULL:**
+#### Cara yang benar untuk memeriksa NULL
+
+Kesalahan umum pemula adalah menggunakan operator perbandingan seperti `=` atau `!=` saat mencari baris yang memiliki nilai `NULL`. Ini tidak akan pernah bekerja karena perbandingan langsung dengan `NULL` selalu menghasilkan nilai `unknown`.
+
+Contoh kesalahan umum:
 
 ```sql
--- ❌ SALAH: Tidak akan bekerja seperti yang diharapkan
+-- ❌ SALAH: Tidak akan mengembalikan baris apa pun
 SELECT * FROM products WHERE name = NULL;
+```
 
+Cara yang benar adalah menggunakan operator khusus:
+
+```sql
 -- ✅ BENAR: Menggunakan IS NULL
 SELECT * FROM products WHERE name IS NULL;
 ```
 
+Operator `IS NULL` dan `IS NOT NULL` dibuat secara khusus untuk menangani nilai yang tidak diketahui. Dengan begitu, Anda bisa mencari data yang benar-benar tidak memiliki nilai (unknown) dengan hasil yang konsisten.
+
+Penggunaan `IS NULL` ini sangat penting ketika bekerja dengan data yang tidak lengkap atau ketika kolom tertentu memang boleh tidak memiliki nilai.
+
 ### b. Three-Valued Boolean Logic
 
-Ketika NULL terlibat dalam perbandingan, hasilnya bukan hanya TRUE atau FALSE, tetapi ada kemungkinan ketiga: **NULL (unknown)**.
+#### Konsep dasar logika tiga nilai
+
+Dalam SQL, khususnya ketika bekerja dengan `NULL`, kita tidak hanya berhadapan dengan dua kemungkinan nilai boolean seperti pada pemrograman biasa (TRUE dan FALSE). SQL menggunakan **Three-Valued Logic (3VL)**, yaitu sistem logika yang memiliki tiga hasil:
+
+1. **TRUE**
+2. **FALSE**
+3. **NULL (unknown)**
+
+Nilai ketiga inilah yang membuat perilaku `NULL` terasa berbeda. Ketika `NULL` ikut masuk ke dalam sebuah ekspresi logika atau perbandingan, SQL sering kali tidak bisa memastikan apakah hasilnya benar atau salah, sehingga hasilnya menjadi: **unknown**.
+
+#### Bagaimana perbandingan menjadi “unknown”
+
+Mari lihat contoh konkret:
 
 ```sql
 SELECT 'Aaron' = NULL;  -- Hasil: NULL (bukan TRUE atau FALSE)
-SELECT NULL = NULL;     -- Hasil: NULL (bahkan NULL tidak "equal" dengan NULL)
 ```
+
+Kenapa hasilnya bukan FALSE saja?
+Karena SQL tidak tahu apa nilai `NULL` sebenarnya. Bisa saja nilai yang hilang itu memang `'Aaron'`, atau `'Bob'`, atau sesuatu yang lain. Karena tidak ada informasi, SQL tidak dapat menyimpulkan. Akhirnya, hasil yang diberikan adalah **NULL**, yaitu “saya tidak tahu”.
+
+#### NULL dibandingkan dengan NULL
+
+Hal yang sering mengejutkan adalah bahwa `NULL` tidak dianggap sama dengan `NULL`.
+
+```sql
+SELECT NULL = NULL;  -- Hasil: NULL
+```
+
+Ini terjadi karena SQL memandang `NULL` sebagai “nilai yang tidak diketahui”. Membandingkan dua hal yang sama-sama tidak diketahui tetap tidak memberikan informasi apa pun. Ibaratnya:
+“Kita punya dua kotak tertutup. Apakah isi keduanya sama?”
+Selama tidak dibuka, jawabannya tetap: “Tidak tahu.”
+
+#### Implikasi penggunaan Three-Valued Logic
+
+Pemahaman tentang 3VL sangat penting saat menulis query yang melibatkan kondisi, terutama di bagian `WHERE`, `JOIN`, atau filter kompleks. Jika tidak berhati-hati, baris yang memiliki `NULL` sering kali tidak ikut terpilih karena hasil kondisinya menjadi “unknown” dan dianggap tidak memenuhi filter.
+
+Inilah mengapa SQL menyediakan operator khusus seperti `IS NULL` dan `IS NOT NULL`—agar Anda bisa menangani kasus “unknown” secara eksplisit, bukan mengandalkan perbandingan yang menghasilkan hasil ambigu.
 
 ### c. Constraint NOT NULL
 
-**Sintaks dasar:**
+#### Cara kerja dan tujuan penggunaan NOT NULL
+
+Constraint `NOT NULL` digunakan untuk memastikan bahwa sebuah kolom _selalu memiliki nilai_ ketika baris baru disimpan. Dengan kata lain, kolom tersebut tidak boleh dibiarkan kosong atau tidak diisi. Ini merupakan salah satu bentuk **data integrity constraint** yang paling dasar dan paling sering digunakan dalam desain database.
+
+Pada dasarnya, `NOT NULL` memberi tahu database:
+“Kolom ini wajib diisi. Tidak boleh ada nilai yang tidak diketahui (NULL).”
+
+#### Perbandingan dua cara mendefinisikan kolom yang wajib memiliki nilai
+
+Kadang ada orang yang mencoba menerapkan aturan “kolom tidak boleh NULL” menggunakan `CHECK constraint`. Secara teknis, ini bisa dilakukan, tetapi bukan cara yang tepat.
+
+Contoh yang kurang tepat:
 
 ```sql
 -- ❌ Cara yang tidak direkomendasikan (menggunakan CHECK constraint)
@@ -54,7 +121,13 @@ CREATE TABLE products (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name TEXT CHECK (name IS NOT NULL)  -- Tidak efisien
 );
+```
 
+Secara fungsi, ini memang mencegah nilai NULL. Namun, cara ini **tidak efisien** dan membuat schema menjadi kurang jelas. Selain itu, database sudah memiliki mekanisme khusus untuk menangani hal ini, sehingga menggunakan `CHECK` justru membingungkan dan membuat performa lebih buruk.
+
+Cara yang benar adalah menggunakan constraint khususnya:
+
+```sql
 -- ✅ Cara yang direkomendasikan
 CREATE TABLE products (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -63,7 +136,11 @@ CREATE TABLE products (
 );
 ```
 
-**Kombinasi dengan CHECK constraint:**
+Di sini, schema lebih mudah dibaca: kita bisa langsung melihat mana kolom yang wajib diisi tanpa harus menelusuri ekspresi `CHECK`.
+
+#### Menggabungkan NOT NULL dengan logika domain menggunakan CHECK
+
+`NOT NULL` sering digunakan bersamaan dengan `CHECK` untuk menerapkan aturan bisnis yang lebih spesifik. Contoh:
 
 ```sql
 CREATE TABLE products (
@@ -73,12 +150,28 @@ CREATE TABLE products (
 );
 ```
 
-Pada contoh di atas:
+Penjelasannya:
 
-- `NOT NULL` memastikan harus ada nilai
-- `CHECK (price > 0)` memastikan nilai harus lebih besar dari 0 (karena untuk bisnis tertentu, 0 sama saja dengan NULL)
+- `name TEXT NOT NULL` memastikan setiap produk pasti memiliki nama.
+- `price NUMERIC NOT NULL` memastikan harga harus diberikan.
+- `CHECK (price > 0)` menegakkan aturan bisnis bahwa harga harus bernilai positif.
+
+Constraint ini bekerja bersama-sama. Meskipun `price` sudah diberi `NOT NULL`, kita tetap membutuhkan `CHECK (price > 0)` karena dalam bisnis tertentu, harga `0` dianggap tidak valid atau sama saja dengan tidak memberikan nilai sama sekali.
+
+Dengan kombinasi tersebut, database menjadi lebih kuat dalam menjaga kualitas data, dan kesalahan input dapat dicegah sejak awal sebelum data masuk ke tabel.
 
 ### d. Primary Key dan NOT NULL
+
+#### Hubungan otomatis antara PRIMARY KEY dan NOT NULL
+
+Saat Anda mendeklarasikan sebuah kolom sebagai **PRIMARY KEY**, SQL secara otomatis menambahkan dua aturan penting pada kolom tersebut:
+
+1. **Kolom tidak boleh NULL (NOT NULL)**
+2. **Nilai dalam kolom tersebut harus unik (UNIQUE)**
+
+Akibatnya, Anda tidak perlu lagi menuliskan `NOT NULL` secara terpisah. Database sudah menganggap bahwa sebuah primary key _wajib memiliki nilai_ dan _tidak boleh duplikat_.
+
+Perhatikan contoh berikut:
 
 ```sql
 CREATE TABLE products (
@@ -86,14 +179,32 @@ CREATE TABLE products (
 );
 ```
 
-**Poin penting:**
+Dalam definisi tabel ini:
 
-- PRIMARY KEY secara otomatis menambahkan constraint NOT NULL
-- Tidak perlu menambahkan NOT NULL secara eksplisit pada kolom primary key
+- Kolom `id` sudah otomatis menjadi **NOT NULL**, meskipun tidak dituliskan secara eksplisit.
+- Kolom tersebut juga memiliki constraint **UNIQUE**, karena setiap baris harus memiliki `id` yang berbeda.
+- Penggunaan `GENERATED ALWAYS AS IDENTITY` memungkinkan database menghasilkan nilai incremental otomatis untuk setiap baris baru.
+
+Dengan demikian, menambah `NOT NULL` secara manual seperti ini tidak diperlukan:
+
+```sql
+-- ❌ Tidak perlu melakukan ini
+id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY NOT NULL
+```
+
+Karena efeknya sama saja, dan penulisan tersebut hanya membuat schema lebih panjang tanpa alasan.
+
+Secara keseluruhan, PRIMARY KEY sudah mencakup semua yang diperlukan untuk sebuah identifier unik: nilai harus ada, dan tidak boleh sama dengan baris lainnya.
 
 ### e. Perilaku Default (Nullable)
 
-**Secara default, semua kolom adalah NULLABLE** kecuali dinyatakan sebaliknya:
+#### Kolom secara default bersifat nullable
+
+Dalam SQL, setiap kolom yang Anda buat **secara otomatis dianggap boleh berisi NULL** kecuali Anda secara eksplisit memberikan constraint `NOT NULL`. Ini adalah aturan dasar yang sering terlewat oleh banyak orang ketika baru belajar merancang schema database.
+
+Artinya, jika Anda tidak menuliskan apa pun pada kolom tersebut, SQL akan menganggap bahwa kolom itu _boleh tidak diisi_, dan nilai default-nya bisa berupa `NULL`.
+
+Perhatikan contoh berikut:
 
 ```sql
 CREATE TABLE products (
@@ -101,10 +212,32 @@ CREATE TABLE products (
     name TEXT,        -- Nullable (default)
     description TEXT  -- Nullable (default)
 );
+```
 
+Pada definisi tabel di atas:
+
+- Kolom `name` tidak diberi `NOT NULL`, sehingga sifatnya **nullable**.
+- Kolom `description` juga **nullable** secara default.
+- Satu-satunya kolom yang pasti tidak boleh NULL adalah `id`, karena kolom tersebut adalah primary key.
+
+#### Contoh perilaku penyimpanan data
+
+Karena kolom `name` dan `description` bersifat nullable, SQL tidak memaksa Anda untuk selalu memberikan nilai pada kolom tersebut ketika melakukan `INSERT`.
+
+Contohnya:
+
+```sql
 -- Ini valid:
 INSERT INTO products (name) VALUES (NULL);  -- ✅ Berhasil
 ```
+
+Perintah di atas berhasil disimpan karena:
+
+- `name` boleh berisi NULL.
+- `description` juga nullable dan tidak wajib diisi.
+- Kolom `id` akan diisi otomatis oleh mekanisme `GENERATED ALWAYS AS IDENTITY`.
+
+Ini menunjukkan bahwa suatu kolom akan menerima nilai `NULL` selama Anda tidak memberikan constraint yang memaksanya untuk selalu memiliki nilai. Memahami perilaku default ini penting agar Anda dapat merancang schema yang konsisten dengan kebutuhan aplikasi dan aturan bisnis.
 
 ## 3. Hubungan Antar Konsep
 
