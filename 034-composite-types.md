@@ -10,34 +10,73 @@ Video ini membahas **composite types** di PostgreSQL, yaitu tipe data yang mengg
 
 ### a. Apa itu Composite Types?
 
-**Definisi:**
-Composite type adalah tipe data kustom yang **menggabungkan beberapa tipe data PostgreSQL** menjadi **satu unit diskrit** yang tidak terpisahkan.
+#### Definisi
 
-**Karakteristik:**
+Composite type adalah tipe data kustom di PostgreSQL yang memungkinkan Anda **menggabungkan beberapa tipe data berbeda** menjadi **satu kesatuan**. Dengan kata lain, Anda bisa membuat sebuah “paket data” yang berisi banyak field, lalu memperlakukan paket tersebut sebagai satu tipe tunggal. Konsepnya mirip seperti `struct` di berbagai bahasa pemrograman.
 
-- Membungkus multiple types menjadi **satu compressed unit of information**
-- Mirip dengan **struct** di bahasa pemrograman lain
-- **Inseparable unit**: semua field diperlakukan sebagai satu kesatuan
-- **Tidak bisa memiliki constraints** (seperti `NOT NULL`) di level type definition
+#### Karakteristik Utama
 
-**Kapan composite types berguna:**
+Ada beberapa hal penting yang membuat composite type berbeda dengan tipe data lain:
 
-- Ketika ada **group of related fields** yang selalu muncul bersama
-- Digunakan oleh **extensions** seperti PostGIS (contoh: `address` type dengan 18 fields)
-- Untuk membuat **reusable data structures** di database
+- Ia membungkus beberapa kolom menjadi **satu unit informasi yang terkompresi** — bukan kolom terpisah.
+- Secara konsep, ia sangat mirip dengan **struct**, di mana semua field berada dalam satu entitas terpadu.
+- Karena merupakan satu kesatuan, composite type adalah **inseparable unit**, sehingga field-field di dalamnya tidak dapat diperlakukan sebagai entitas terisolasi.
+- Composite type **tidak mendukung constraints** pada level definisi tipe. Artinya, Anda tidak bisa menambahkan aturan seperti `NOT NULL` atau `CHECK` langsung pada tipe tersebut.
 
-**⚠️ DISCLAIMER PENTING:**
-Composite types **jarang digunakan** dalam praktik! Biasanya alternatif berikut lebih baik:
+#### Kapan Composite Types Berguna?
 
-- **Discrete columns** di table
-- **JSON/JSONB column** untuk semi-structured data
-- **Separate table** dengan relasi (normalization)
+Meskipun jarang dipakai, composite types tetap memiliki fungsi di beberapa kasus tertentu:
 
----
+- Saat Anda memiliki sekumpulan field yang **selalu muncul bersama** dan masuk akal untuk dijadikan satu paket.
+- Banyak **extensions** PostgreSQL—seperti PostGIS—mengandalkan composite types untuk menyimpan data kompleks. Misalnya, sebuah `address` type dapat berisi hingga 18 field yang selalu digunakan secara bersamaan.
+- Berguna untuk membuat **struktur data reusable** yang dapat digunakan di berbagai tabel tanpa memerlukan duplikasi definisi kolom.
+
+Sebagai ilustrasi, berikut contoh sederhana pembuatan composite type:
+
+```sql
+CREATE TYPE full_name AS (
+  first_name text,
+  last_name text
+);
+```
+
+Jika Anda menggunakan tipe ini dalam sebuah tabel:
+
+```sql
+CREATE TABLE users (
+  id serial PRIMARY KEY,
+  name full_name
+);
+```
+
+Maka satu kolom `name` akan berisi dua nilai sekaligus (`first_name` dan `last_name`), dan keduanya hanya dapat diakses sebagai bagian dari satu unit data.
+
+Untuk mengambil datanya:
+
+```sql
+SELECT
+  (name).first_name,
+  (name).last_name
+FROM users;
+```
+
+Hasilnya menampilkan field yang ada di dalam composite type, tetapi secara penyimpanan tetap dianggap satu kolom.
+
+#### Disclaimer Penting
+
+Dalam praktik sehari-hari, composite types sebenarnya **jarang sekali digunakan**. Ada beberapa alasan mengapa alternatif berikut biasanya lebih disarankan:
+
+- Menyimpan nilai sebagai **kolom terpisah** jauh lebih fleksibel.
+- Menggunakan **JSON/JSONB** lebih cocok untuk data semi-terstruktur atau data yang skemanya dinamis.
+- Membuat **tabel terpisah** dengan relasi (sesuai prinsip normalisasi database) sering kali lebih jelas dan lebih mudah dikelola.
+
+Jadi, composite types tetap merupakan fitur kuat di PostgreSQL, tetapi penggunaannya banyak bergantung pada konteks dan kebutuhan khusus—dan sering kali, opsi lain lebih tepat.
 
 ### b. Cara Membuat Composite Type
 
-**Sintaks:**
+#### Sintaks Dasar
+
+Untuk membuat composite type, Anda mendefinisikan sebuah tipe baru yang berisi beberapa field dengan tipe masing-masing. Bentuk umumnya seperti berikut:
 
 ```sql
 CREATE TYPE type_name AS (
@@ -47,10 +86,11 @@ CREATE TYPE type_name AS (
 );
 ```
 
-**⚠️ Keyword `AS` sangat penting!**
-Tanpa `AS`, PostgreSQL akan mengira Anda membuat tipe data berbeda (enum atau domain).
+Hal yang perlu diperhatikan adalah penggunaan keyword `AS`. Bagian ini terlihat sederhana, tetapi sangat penting. Jika Anda menghilangkan `AS`, PostgreSQL akan menafsirkan perintah tersebut sebagai pembuatan tipe lain (misalnya enum atau domain), bukan composite type.
 
-**Contoh: Address Type**
+#### Contoh: Membuat Address Type
+
+Anggap Anda ingin membuat tipe `address` yang berisi beberapa informasi alamat. Maka Anda bisa menuliskannya seperti ini:
 
 ```sql
 CREATE TYPE address AS (
@@ -62,75 +102,95 @@ CREATE TYPE address AS (
 );
 ```
 
-**Penjelasan:**
+Mari kita uraikan:
 
-- `address` adalah nama composite type
-- Memiliki 5 fields: number (int), street (text), city (text), state (text), zip (text)
-- Syntax mirip dengan **table constructor**, tapi ini bukan table!
+- `address` adalah nama composite type yang Anda buat.
+- Di dalamnya terdapat lima field: `number`, `street`, `city`, `state`, dan `zip`.
+- Masing-masing field memiliki tipe data sendiri. Misalnya `number` adalah integer, sementara empat lainnya berupa text.
+- Walaupun sintaksnya mirip definisi kolom dalam tabel, ingat bahwa **ini bukan tabel**. Composite type hanya mendefinisikan “bentuk data” yang nantinya bisa dipakai di kolom tabel lain.
 
-**Keterbatasan:**
+#### Keterbatasan Composite Type
+
+Composite type memiliki batasan penting, yaitu Anda **tidak bisa menambahkan constraints** langsung pada definisi tipe tersebut. Berikut contohnya:
 
 ```sql
--- ❌ TIDAK BISA: constraints di type definition
+-- ❌ Tidak diizinkan: menambahkan constraint pada field composite type
 CREATE TYPE address AS (
   number INT NOT NULL,  -- ERROR!
   street TEXT
 );
+```
 
--- ✅ BISA: constraints di table level (nanti)
+PostgreSQL akan menolak definisi ini karena composite type tidak mendukung constraints seperti `NOT NULL`, `CHECK`, atau aturan lainnya di level tipe.
+
+Namun, Anda tetap bisa menambahkan constraint **di level tabel** yang menggunakan composite type tersebut. Misalnya:
+
+```sql
+-- ✅ Diperbolehkan: constraint diterapkan pada kolom tabel
 CREATE TABLE addresses (
   id SERIAL PRIMARY KEY,
-  addr address NOT NULL  -- constraint di sini OK
+  addr address NOT NULL
 );
 ```
 
----
+Di sini, kolom `addr` bertipe `address`, dan Anda bebas memberi constraint seperti `NOT NULL` pada kolom tersebut. Cara ini membuat Anda tetap bisa mengontrol validasi data tanpa melanggar aturan composite type.
+
+Dengan memahami sintaks, contoh, dan batasannya, Anda bisa menentukan apakah composite type memang cocok untuk kebutuhan struktur data Anda.
 
 ### c. Cara Instantiate (Membuat Instance) Composite Type
 
-Ada beberapa cara untuk membuat instance dari composite type:
+#### Metode 1: Menggunakan `ROW()` Constructor
 
-**Metode 1: Menggunakan `ROW()` constructor**
+Cara yang paling umum dan paling jelas untuk membuat instance dari composite type adalah menggunakan fungsi `ROW()`. Anda cukup mengisi nilai-nilai field sesuai urutan yang didefinisikan dalam composite type, lalu melakukan cast ke tipe yang Anda inginkan.
 
 ```sql
 SELECT ROW(123, 'Main', 'Anytown', 'ST', '12345')::address;
 -- Output: (123,Main,Anytown,ST,12345)
+```
 
--- Cek tipe data
+Jika Anda ingin memastikan bahwa hasilnya benar-benar bertipe `address`, Anda bisa melakukan pengecekan menggunakan `pg_typeof`:
+
+```sql
 SELECT pg_typeof(
   ROW(123, 'Main', 'Anytown', 'ST', '12345')::address
 );
 -- Output: address
 ```
 
-**Metode 2: Shorthand tanpa `ROW` keyword**
+Dengan metode ini, PostgreSQL akan mengenali bahwa Anda sedang membuat sebuah baris (row) yang kemudian dikonversi menjadi sebuah instance dari composite type `address`.
+
+#### Metode 2: Shorthand Tanpa Keyword `ROW`
+
+PostgreSQL juga menyediakan sintaks yang lebih ringkas. Anda dapat menulis nilai-nilai field langsung di dalam tanda kurung tanpa menuliskan keyword `ROW`. Namun, tanda kurung tetap wajib karena PostgreSQL perlu tahu bahwa Anda sedang membuat satu unit data.
 
 ```sql
--- Bisa drop keyword ROW, tapi parentheses tetap perlu
 SELECT (123, 'Main', 'Anytown', 'ST', '12345')::address;
 -- Output: (123,Main,Anytown,ST,12345)
 ```
 
-**Metode 3: String literal (TIDAK DISARANKAN)**
+Secara fungsional, cara ini identik dengan penggunaan `ROW()`. Bedanya hanya di gaya penulisan yang lebih pendek.
+
+#### Metode 3: String Literal (Tidak Disarankan)
+
+Anda juga bisa membuat instance composite type dengan menuliskan seluruh nilainya sebagai string literal. Tetapi cara ini memiliki banyak kelemahan, terutama pada data teks yang membutuhkan penanganan tanda kutip.
 
 ```sql
--- Metode string literal ribet karena nested quotes
 SELECT '(123,"Main St","Any Town","ST","12345")'::address;
 ```
 
-**Mengapa string literal tidak disarankan:**
+Mengapa metode ini tidak direkomendasikan?
 
-- Perlu **double quoting** untuk text fields
-- **Nested quotes** susah di-escape
-- Error-prone dan **tidak readable**
+- Anda harus menggunakan **double quoting** pada masing-masing field bertipe teks.
+- Memunculkan banyak **nested quotes**, yang membuat kode lebih sulit dibaca dan rentan kesalahan.
+- Secara keseluruhan, cara ini mudah menimbulkan bug, terutama ketika nilai field mengandung karakter khusus.
 
-**Rekomendasi: Gunakan `ROW()` atau shorthand parentheses.**
-
----
+Karena alasan tersebut, cara terbaik dan paling aman adalah menggunakan `ROW()` atau shorthand parentheses, karena keduanya lebih konsisten, terbaca dengan jelas, dan minim error.
 
 ### d. Menyimpan Composite Type di Table
 
-**Membuat table dengan composite type column:**
+#### Membuat Tabel yang Memiliki Kolom Composite Type
+
+Untuk menyimpan composite type ke dalam tabel, Anda cukup mendefinisikan sebuah kolom yang menggunakan tipe tersebut. Contohnya seperti berikut:
 
 ```sql
 CREATE TABLE addresses (
@@ -139,66 +199,81 @@ CREATE TABLE addresses (
 );
 ```
 
-**Penjelasan:**
+Mari kita uraikan:
 
-- `id` adalah auto-incrementing primary key (syntax modern)
-- `addr` adalah kolom dengan tipe **composite type `address`**
-- Satu kolom `addr` menyimpan **5 fields sekaligus**
+- Kolom `id` menggunakan sintaks modern `GENERATED ALWAYS AS IDENTITY`, yang artinya PostgreSQL akan mengisi nilai ini secara otomatis seperti auto-increment.
+- Kolom `addr` bertipe `address`, yaitu composite type yang sudah Anda definisikan sebelumnya.
+- Satu kolom `addr` sebenarnya menyimpan **lima field** sekaligus (`number`, `street`, `city`, `state`, `zip`). Semuanya dikemas sebagai satu unit data.
 
-**Insert data:**
+#### Menyisipkan Data ke Tabel
+
+Untuk memasukkan nilai ke dalam kolom composite type, Anda bisa menggunakan `ROW()` ataupun shorthand parentheses.
+
+Menggunakan `ROW()`:
 
 ```sql
 INSERT INTO addresses (addr)
 VALUES (
   ROW(123, 'Main', 'Anytown', 'ST', '12345')::address
 );
+```
 
--- Atau menggunakan shorthand
+Atau shorthand tanpa `ROW`:
+
+```sql
 INSERT INTO addresses (addr)
 VALUES (
   (456, 'Elm St', 'Springfield', 'IL', '62701')::address
 );
 ```
 
-**Query data:**
+Kedua bentuk ini menghasilkan instance `address` yang valid.
+
+#### Melihat Data yang Sudah Disimpan
+
+Untuk melihat data di tabel:
 
 ```sql
 SELECT * FROM addresses;
 ```
 
-**Output:**
+Output yang ditampilkan PostgreSQL akan mirip seperti ini:
 
 | id  | addr                                |
 | --- | ----------------------------------- |
 | 1   | (123,Main,Anytown,ST,12345)         |
 | 2   | (456,"Elm St",Springfield,IL,62701) |
 
-**Perhatikan:**
+Hal yang perlu diperhatikan:
 
-- Composite type ditampilkan sebagai **satu unit** dalam parentheses
-- Text dengan spasi otomatis di-quote oleh PostgreSQL
+- Nilai composite type ditampilkan sebagai **satu unit** di dalam tanda kurung.
+- Field bertipe text yang memiliki spasi akan otomatis diberi tanda kutip oleh PostgreSQL.
 
----
+Dengan pola ini, Anda dapat menyimpan struktur data yang kompleks dalam sebuah kolom, namun tetap mengaksesnya sebagai satu kesatuan.
 
 ### e. Mengakses Individual Fields dari Composite Type
 
-**Problem: Syntax yang tricky**
+#### Masalah: Sintaks yang Sedikit Menjebak
+
+Saat pertama kali mencoba mengakses field di dalam composite type, banyak orang menulisnya seperti mengakses kolom dalam tabel:
 
 ```sql
--- ❌ TIDAK BEKERJA: PostgreSQL mengira 'addr' adalah table name
 SELECT addr.number FROM addresses;
--- ERROR: missing FROM-clause entry for table "addr"
 ```
 
-**Mengapa error?**
+Namun, ini akan menghasilkan error:
 
-- PostgreSQL melihat `addr.number` dan mengira `addr` adalah **table alias**
-- Karena tidak ada table bernama `addr`, maka error
+```
+ERROR: missing FROM-clause entry for table "addr"
+```
 
-**✅ Solusi: Wrap kolom dalam parentheses**
+Mengapa demikian? Ketika PostgreSQL melihat `addr.number`, ia menganggap `addr` adalah **alias tabel**, bukan kolom yang berisi composite type. Karena tidak ada tabel bernama `addr`, PostgreSQL pun mengembalikan error.
+
+#### Solusi: Bungkus Kolom dalam Parentheses
+
+Untuk memberi tahu PostgreSQL bahwa `addr` adalah sebuah kolom bertipe composite, bukan alias tabel, Anda perlu membungkusnya dengan tanda kurung:
 
 ```sql
--- ✅ BEKERJA: parentheses memberitahu PostgreSQL ini composite type
 SELECT (addr).number FROM addresses;
 -- Output: 123
 
@@ -209,7 +284,11 @@ SELECT (addr).city FROM addresses;
 -- Output: Anytown
 ```
 
-**Query multiple fields:**
+Dengan `(addr).field`, PostgreSQL memahami bahwa Anda sedang mengakses field dari composite type.
+
+#### Mengakses Banyak Field Sekaligus
+
+Anda bisa mengambil beberapa field sekaligus seperti berikut:
 
 ```sql
 SELECT
@@ -222,14 +301,16 @@ SELECT
 FROM addresses;
 ```
 
-**Output:**
+Contoh outputnya:
 
 | id  | number | street | city        | state | zip   |
 | --- | ------ | ------ | ----------- | ----- | ----- |
 | 1   | 123    | Main   | Anytown     | ST    | 12345 |
 | 2   | 456    | Elm St | Springfield | IL    | 62701 |
 
-**Diagram akses field:**
+Di sini, setiap field diambil dari satu kolom composite type yang dikemas secara utuh.
+
+#### Diagram Cara Kerjanya
 
 ```
 addresses table
@@ -245,45 +326,60 @@ addresses table
     └── (addr).zip     → 12345
 ```
 
----
+Dengan pola ini, Anda bisa mengakses bagian mana pun dari composite type dengan sintaks yang konsisten dan mudah dibaca.
 
 ### f. Kapan Menggunakan Composite Types vs Alternatif
 
-**Composite Types cocok untuk:**
+#### Situasi di Mana Composite Types Cocok Digunakan
 
-✅ **Extension-generated data**
+Composite types tidak selalu menjadi pilihan utama dalam desain schema, tetapi ada beberapa kasus spesifik di mana pendekatan ini justru sangat efektif.
+
+**1. Data yang Dihasilkan oleh Extension**
+
+Beberapa extension PostgreSQL, seperti PostGIS, memang dirancang untuk mengembalikan composite type.
+Contohnya:
 
 ```sql
--- PostGIS returns composite types
 SELECT ST_GeomFromText('POINT(0 0)');
--- Returns composite type dengan x, y, srid, dll
 ```
 
-✅ **Truly inseparable data groups**
+Fungsi ini mengembalikan struktur kompleks yang terdiri dari berbagai komponen (misalnya x, y, dan SRID). Menggunakan composite type di sini adalah hal yang natural karena kita menerima satu paket data teknis yang tidak bisa dipisahkan.
+
+**2. Kelompok Data yang Benar-Benar Tidak Bisa Dipisahkan**
+
+Contoh yang baik adalah bilangan kompleks—real part dan imaginary part selalu berjalan bersama.
 
 ```sql
--- Complex number: real dan imaginary part selalu bersama
 CREATE TYPE complex AS (
   real NUMERIC,
   imag NUMERIC
 );
 ```
 
-✅ **Function return types**
+Dua nilai ini tidak pernah diperlakukan terpisah, sehingga membungkusnya dalam composite type membuat struktur data lebih jelas dan terorganisir.
+
+**3. Mengembalikan Beberapa Nilai dari Sebuah Function**
+
+Composite types juga sangat berguna untuk fungsi yang mengembalikan beberapa nilai sekaligus tanpa perlu membuat table khusus.
 
 ```sql
 CREATE FUNCTION get_full_address(user_id INT)
 RETURNS address AS $$
-  -- return composite type
+  -- logika fungsi
 $$ LANGUAGE sql;
 ```
 
-**Alternatif yang lebih umum:**
+Dengan cara ini, Anda bisa mengirimkan satu unit informasi lengkap sebagai return value.
 
-**1. Discrete Columns (paling umum)**
+#### Alternatif yang Lebih Umum Digunakan
+
+Dalam praktik sehari-hari, biasanya ada pilihan yang lebih fleksibel, lebih mudah di-query, atau lebih siap untuk dioptimalkan.
+
+#### 1. Discrete Columns (Paling Umum dan Paling Mudah)
+
+Ini adalah pendekatan paling standar.
 
 ```sql
--- ✅ Lebih jelas, lebih mudah di-query
 CREATE TABLE addresses (
   id SERIAL PRIMARY KEY,
   number INT,
@@ -292,41 +388,54 @@ CREATE TABLE addresses (
   state TEXT,
   zip TEXT
 );
+```
 
--- Query lebih mudah, tidak perlu parentheses
+Contoh query sederhana:
+
+```sql
 SELECT number, street FROM addresses WHERE city = 'Anytown';
 ```
 
-**Keuntungan:**
+**Mengapa ini populer?**
 
-- **Lebih readable**
-- **Lebih mudah di-query** (tidak perlu syntax khusus)
-- Bisa pakai **indexes** per-column
-- Bisa pakai **constraints** per-column
+- Struktur tabel lebih jelas dan eksplisit.
+- Anda bisa melakukan indexing per kolom.
+- Dapat memberikan constraint per kolom (NOT NULL, UNIQUE, CHECK).
+- Query jauh lebih mudah karena tidak perlu syntax `(addr).field`.
 
-**2. JSON/JSONB Column**
+#### 2. JSON/JSONB Column untuk Data Semi-Terstruktur
+
+Jika schema berpotensi berubah atau tidak selalu konsisten, JSON/JSONB adalah pilihan fleksibel.
 
 ```sql
 CREATE TABLE addresses (
   id SERIAL PRIMARY KEY,
   addr JSONB
 );
+```
 
-INSERT INTO addresses (addr) VALUES (
-  '{"number": 123, "street": "Main", "city": "Anytown"}'
-);
+Insert data:
 
--- Query dengan JSON operators
+```sql
+INSERT INTO addresses (addr)
+VALUES ('{"number": 123, "street": "Main", "city": "Anytown"}');
+```
+
+Query menggunakan operator JSON:
+
+```sql
 SELECT addr->>'street' FROM addresses;
 ```
 
-**Keuntungan:**
+**Keuntungan utamanya:**
 
-- **Fleksibel**: bisa tambah/kurangi fields tanpa ALTER TABLE
-- **Indexable** dengan GIN indexes
-- **Semi-structured data** cocok untuk schema yang berubah
+- Mudah menambah atau menghapus field tanpa `ALTER TABLE`.
+- Mendukung indexing menggunakan GIN.
+- Ideal untuk data yang tidak selalu memiliki struktur tetap.
 
-**3. Separate Table (normalization)**
+#### 3. Separate Table untuk Normalisasi
+
+Jika satu entitas butuh menyimpan banyak item terkait (misalnya satu user memiliki banyak alamat), pendekatan tabel terpisah adalah pilihan terbaik.
 
 ```sql
 CREATE TABLE users (
@@ -343,13 +452,15 @@ CREATE TABLE addresses (
 );
 ```
 
-**Keuntungan:**
+**Keunggulan desain ini:**
 
-- **Properly normalized**
-- Multiple addresses per user
-- Bisa di-query independently
+- Struktur data lebih rapi dan sesuai prinsip normalisasi.
+- Setiap entitas bisa di-query secara mandiri.
+- Fleksibel untuk relasi satu-ke-banyak atau bahkan banyak-ke-banyak.
 
-**Comparison table:**
+#### Tabel Perbandingan
+
+Berikut ringkasan komparasi setiap pendekatan:
 
 | Approach             | Readability | Flexibility | Query Ease | Use Case                         |
 | -------------------- | ----------- | ----------- | ---------- | -------------------------------- |
@@ -358,7 +469,7 @@ CREATE TABLE addresses (
 | **JSON/JSONB**       | Medium      | Very High   | Medium     | Semi-structured, changing schema |
 | **Separate Table**   | High        | High        | High       | Normalized data, one-to-many     |
 
----
+Dengan memahami karakteristik masing-masing opsi, Anda dapat memilih desain yang paling tepat untuk kasus penggunaan tertentu—apakah ingin struktur data yang tidak terpisahkan, fleksibilitas tinggi, atau kemudahan dalam melakukan query dan indexing.
 
 ### g. Real-World Use Case: PostGIS Extension
 
