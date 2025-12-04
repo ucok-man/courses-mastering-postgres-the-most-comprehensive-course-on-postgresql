@@ -8,67 +8,118 @@ Video ini menjelaskan mekanisme storage internal PostgreSQL untuk menjawab perta
 
 ### a. Review: Pointer dari Index ke Table
 
-**Recall dari video sebelumnya:**
+Pada video sebelumnya, kita melihat bagaimana database menggunakan **index** untuk mempercepat pencarian data. Contoh sederhana yang sering dipakai adalah query berikut:
 
-```
-Query: SELECT * FROM users WHERE last_name = 'Smith';
-
-Step 1: Traverse index
-        idx_last_name → Find 'Smith'
-
-Step 2: Index hanya punya last_name column
-        Query butuh "*" (semua kolom)
-
-Step 3: Gunakan POINTER untuk kembali ke table
-        ↓
-        Pertanyaan: Apa itu pointer? Bagaimana cara kerjanya?
+```sql
+SELECT * FROM users WHERE last_name = 'Smith';
 ```
 
-**Masalah yang harus dipecahkan:**
+Untuk menjawab query ini, database melakukan beberapa langkah penting:
 
-- Index adalah struktur data terpisah dari table
-- Setelah traverse index, perlu cara untuk "jump" langsung ke row yang tepat di table
-- Tanpa pointer: Harus scan seluruh table lagi (lambat!)
-- Dengan pointer: Langsung ke lokasi exact row (cepat!)
+1. **Menelusuri index** terlebih dahulu.
+   Misalnya ada index bernama `idx_last_name`. Database akan mencari entri `'Smith'` di dalam index ini.
 
-**Pertanyaan kunci video ini:**
+2. **Index hanya menyimpan kolom yang di-index** — dalam hal ini hanya `last_name`.
+   Namun query meminta `SELECT *`, yang berarti seluruh kolom harus diambil.
 
-> "What is that connection between the separate data structure and the rest of the data that we likely need?"
+3. **Database harus kembali ke table utama** untuk mengambil seluruh kolom.
+   Di sinilah konsep _pointer_ muncul sebagai kunci.
 
-### b. Heap Storage - Cara PostgreSQL Menyimpan Data
+#### Kenapa Butuh Pointer?
 
-**Definisi Heap:**
+Satu hal yang penting dipahami: **index bukan bagian dari table**, melainkan struktur data yang terpisah. Index disusun khusus untuk mempercepat pencarian, tetapi tidak menyimpan semua data table.
 
-- **Heap** adalah struktur penyimpanan data di PostgreSQL
-- Nama yang tepat karena seperti "pile" atau "tumpukan"
-- Data ditulis ke lokasi mana pun yang ada space tersedia
+Tanpa mekanisme tambahan, ada masalah besar:
 
-**Karakteristik heap:**
+- Setelah index menemukan baris yang cocok, database **tidak otomatis tahu di mana letak baris lengkapnya di table**.
+- Jika tidak ada cara untuk melompat langsung ke baris itu, database harus **scan seluruh table** lagi untuk mencari data lengkapnya — dan ini jelas sangat lambat.
 
-```
-Heap = "Just put the rows wherever there is space"
+Karena itu, index membutuhkan **pointer** — semacam "alamat" atau "koordinat" — yang mengarah langsung ke lokasi row di table. Dengan pointer:
 
-Tidak ada organizing principle khusus:
-- Bisa di page 0
-- Bisa di page 60
-- Bisa di page 432
-- Yang penting: Ada space kosong
-```
+- Setelah index menemukan `'Smith'`, database dapat **langsung melompat** ke baris yang tepat.
+- Tidak perlu membaca baris table lain.
+- Fetch data menjadi jauh lebih cepat.
 
-**Mengapa menggunakan heap?**
+#### Ilustrasi Cara Kerja Pointer
 
-| Aspek                  | Benefit                                           |
-| ---------------------- | ------------------------------------------------- |
-| **INSERT performance** | Sangat cepat! Tidak perlu rearrange existing data |
-| **Write efficiency**   | Cukup cari blank space dan tulis di sana          |
-| **Simplicity**         | Tidak perlu maintain sorted order                 |
+Bayangkan index sebagai daftar nama yang rapi dan terurut:
 
-**Visualisasi heap storage:**
+| last_name | pointer ke row |
+| --------- | -------------- |
+| Adams     | → row #12      |
+| Brown     | → row #87      |
+| Smith     | → row #203     |
+| Smith     | → row #204     |
+
+Saat index menemukan `'Smith'`, ia melihat pointer yang menyertai entri tersebut. Pointer inilah yang mengarah langsung ke lokasi baris di table:
 
 ```
-┌─────────────────────────────────────────────┐
-│           PostgreSQL Database               │
-├─────────────────────────────────────────────┤
+Index:
+  'Smith' → pointer → Row 203 di table users
+                    → Row 204 di table users
+
+Table:
+  Row 203 → { first_name: 'John', last_name: 'Smith', email: '...' }
+  Row 204 → { first_name: 'Alice', last_name: 'Smith', email: '...' }
+```
+
+Database kemudian mengambil data lengkap dari table sesuai kebutuhan query.
+
+#### Pertanyaan Utama dari Video
+
+> “What is that connection between the separate data structure and the rest of the data that we likely need?”
+
+Jawabannya adalah **pointer dari index ke table**.
+Pointer inilah yang menjadi jembatan antara dua struktur data yang terpisah: index dan table utama.
+
+Tanpa pointer, index tidak banyak berguna untuk query seperti `SELECT *`.
+Dengan pointer, index benar-benar mempercepat kinerja database.
+
+### b. Heap Storage – Cara PostgreSQL Menyimpan Data
+
+#### Definisi Heap
+
+Dalam PostgreSQL, **heap** adalah struktur penyimpanan dasar tempat baris-baris data (rows) disimpan. Nama _heap_ cukup menggambarkan cara kerjanya: mirip seperti “tumpukan” atau “kumpulan barang” yang diletakkan di mana saja ada ruang kosong. Tidak ada aturan bahwa data harus disimpan berurutan, tidak perlu disortir, dan tidak harus mengikuti pola tertentu.
+
+Secara sederhana, PostgreSQL hanya melakukan:
+
+```
+Heap = "Letakkan row di mana saja ada space kosong"
+```
+
+Itu berarti sebuah row bisa berada di page 0, page 12, page 300, atau page mana saja — selama masih tersedia ruang.
+
+#### Karakteristik Heap
+
+Karena tidak ada organizing principle khusus, hasilnya kira-kira seperti berikut:
+
+- Row bisa berada di **page 0**
+- Row berikutnya mungkin berada di **page 60**
+- Row lain mungkin berada di **page 432**
+- PostgreSQL hanya memastikan ada **space kosong**, tanpa aturan urutan apa pun
+
+Struktur ini memberi PostgreSQL fleksibilitas tinggi dalam operasi penulisan data.
+
+#### Mengapa PostgreSQL Menggunakan Heap?
+
+Penggunaan heap memberikan beberapa keuntungan besar, terutama untuk beban kerja yang sering melakukan INSERT.
+
+| Aspek                  | Benefit                                                                    |
+| ---------------------- | -------------------------------------------------------------------------- |
+| **INSERT performance** | Sangat cepat — tidak perlu menggeser atau menata ulang data yang sudah ada |
+| **Write efficiency**   | Cukup temukan ruang kosong terdekat dan tulis di situ                      |
+| **Simplicity**         | Tidak perlu menjaga data dalam kondisi terurut                             |
+
+Dengan kata lain, heap memprioritaskan kecepatan tulis dan kemudahan manajemen data.
+
+#### Visualisasi Cara Kerja Heap
+
+Anda bisa membayangkan database PostgreSQL memiliki banyak “halaman” penyimpanan (pages). Masing-masing page dapat berisi beberapa row. Karena heap tidak memiliki aturan pengurutan, posisi row sangat bergantung pada di mana space kosong tersedia.
+
+```
+┌────────────────────────────────────────────┐
+│           PostgreSQL Database              │
+├────────────────────────────────────────────┤
 │  Page 0  │  Page 1  │  Page 2  │  Page 3   │
 ├──────────┼──────────┼──────────┼───────────┤
 │ Row 1    │ Row 7    │          │ Row 15    │
@@ -76,35 +127,55 @@ Tidak ada organizing principle khusus:
 │ Row 3    │          │          │           │
 │          │ (empty)  │          │ (empty)   │
 └──────────┴──────────┴──────────┴───────────┘
-    ↑
-Rows ditempatkan di mana pun ada space,
-tidak ada sorted order!
 ```
 
-**Contoh proses INSERT:**
+Pada ilustrasi di atas, terlihat bahwa:
 
-```
+- Page 0 punya beberapa row
+- Page 1 punya beberapa row dan dua slot kosong
+- Page 2 kosong
+- Page 3 punya beberapa row lagi
+
+Tidak ada hubungan antara row di page satu dengan row di page lainnya — ini murni “asal ada space”.
+
+#### Contoh Proses INSERT
+
+Mari kita lihat bagaimana PostgreSQL menambahkan row baru ke dalam heap.
+
+```sql
 INSERT INTO users VALUES ('Alice', 'Smith', ...);
-        ↓
-PostgreSQL: "Di mana ada space kosong?"
-        ↓
-Scan pages: Page 0 full, Page 1 has space!
-        ↓
-Write to: Page 1, position 9
-        ↓
-Done! Very fast.
 ```
+
+Proses internalnya kira-kira seperti ini:
+
+1. PostgreSQL bertanya, **“Page mana yang masih punya space?”**
+2. Ia melakukan scan ringan terhadap pages:
+
+   - Page 0: penuh
+   - Page 1: ternyata masih ada space!
+
+3. PostgreSQL langsung **menulis row baru** pada slot kosong di Page 1 (misalnya pada posisi ke-9).
+4. Proses selesai — dan semuanya berlangsung sangat cepat.
+
+Karena PostgreSQL tidak perlu:
+
+- menata ulang row existing,
+- menjaga urutan tertentu,
+- atau memindahkan block data lain,
+
+maka operasi INSERT dapat dieksekusi secara efisien.
 
 ### c. Pages - Unit Storage di PostgreSQL
 
-**Apa itu Page?**
+#### Apa itu Page?
 
-- **Page** = Unit penyimpanan dasar di PostgreSQL
-- Equal-sized blocks of data
-- Default size: 8KB per page
-- Semua data (tables, indexes) disimpan dalam pages
+Dalam PostgreSQL, **page** adalah unit penyimpanan paling dasar. Anda bisa membayangkannya sebagai “blok fisik” berukuran tetap yang digunakan untuk menyimpan semua data—baik itu **tables**, **indexes**, maupun struktur internal lainnya. Setiap page memiliki ukuran yang sama, dan secara default PostgreSQL menggunakan ukuran **8KB per page**.
 
-**Struktur pages:**
+Satu database pada akhirnya hanyalah kumpulan page yang saling berdampingan secara berurutan. PostgreSQL membaca dan menulis data dalam satuan page, bukan dalam ukuran baris atau kolom.
+
+#### Struktur Pages dalam Database
+
+Representasi sederhananya dapat digambarkan seperti ini:
 
 ```
 Database = Collection of pages
@@ -124,78 +195,124 @@ Database = Collection of pages
 └──────────────────────┘
 ```
 
-**Inside a single page:**
+Setiap page diperlakukan sebagai unit yang utuh. Ketika PostgreSQL ingin membaca row yang berada di page 120, misalnya, ia akan memuat **seluruh page 120** ke memori, bukan hanya row tertentu saja. Inilah alasan mengapa konsep page sangat penting dalam performa I/O database.
+
+#### Apa yang Ada di Dalam Satu Page?
+
+Di dalam sebuah page, PostgreSQL menyimpan beberapa row sekaligus. Setiap row ditempatkan di **position** atau **offset** tertentu di dalam page. Offset ini di-number mulai dari 0, sama seperti page itu sendiri.
+
+Contohnya:
 
 ```
 ┌────────────────────────────────────┐
 │         Page 5 (8KB)               │
 ├────────────────────────────────────┤
-│ Position 0: Row data (120 bytes)  │
-│ Position 1: Row data (200 bytes)  │
-│ Position 2: Row data (150 bytes)  │
-│ Position 3: Row data (180 bytes)  │
-│ ...                                │
-│ Position 15: Row data (95 bytes)  │
-│ (remaining space available)        │
+│ Position 0: Row data (120 bytes)   │
+│ Position 1: Row data (200 bytes)   │
+│ Position 2: Row data (150 bytes)   │
+│ Position 3: Row data (180 bytes)   │
+│ ...                                 │
+│ Position 15: Row data (95 bytes)   │
+│ (remaining space available)         │
 └────────────────────────────────────┘
 ```
 
-**Key points:**
+Di sini terlihat:
 
-- Pages di-number mulai dari 0: Page 0, Page 1, Page 2, ...
-- Di dalam page, rows punya positions (offsets)
-- Position juga di-number dari 0
+- Page 5 berukuran tetap **8KB**
+- Baris-baris data ditempatkan pada posisi tertentu dalam page
+- Sisa ruang pada page dapat digunakan untuk row baru (selama masih cukup)
+
+Page memiliki struktur internal lain seperti header page, unused space, dan line pointer array. Namun konsep di atas sudah cukup memberi gambaran bagaimana row diposisikan secara fisik di dalam satu page.
+
+#### Key Points yang Perlu Diperhatikan
+
+- Pages selalu di-number dari 0:
+  `Page 0, Page 1, Page 2, ...`
+- Setiap row di dalam page juga punya nomor posisi (offset) mulai dari 0.
+- Semua data—baik table rows maupun index nodes—disimpan dalam bentuk page.
+- Operasi disk PostgreSQL selalu bekerja dalam satuan page, sehingga layout ini sangat memengaruhi performa query.
 
 ### d. CTID (Tuple ID) - Physical Row Identifier
 
-**Definisi CTID:**
+#### Definisi CTID
 
-- **CTID** = Physical location identifier untuk sebuah row
-- Format: `(page_number, position_within_page)`
-- Contoh: `(0,1)` = Page 0, Position 1
+Dalam PostgreSQL, **CTID** adalah identitas fisik dari sebuah row. Jika sebelumnya kita membahas bahwa data disimpan dalam **pages**, dan setiap page memiliki banyak **positions** (offset), maka CTID adalah pasangan informasi yang menunjukkan lokasi persis sebuah row berada di disk.
 
-**CTID adalah hidden system column:**
+Format CTID adalah:
+
+```
+(page_number, position_within_page)
+```
+
+Contoh:
+
+- `(0,1)` berarti row tersebut berada di **Page 0**, **Position 1**
+- `(12,4)` berarti row berada di **Page 12**, **Position 4**
+
+Dengan kata lain, CTID adalah “alamat rumah” sebuah row di dalam storage fisik PostgreSQL.
+
+#### CTID sebagai Hidden System Column
+
+Meskipun CTID dimiliki oleh setiap row, kolom ini **tidak muncul** ketika Anda melakukan `SELECT *`. PostgreSQL menyembunyikannya secara default. Namun CTID tetap ada dan dapat kita lihat jika kita memintanya secara eksplisit.
+
+Perhatikan contoh berikut:
 
 ```sql
--- SELECT * TIDAK include CTID
+-- SELECT * tidak menampilkan CTID
 SELECT * FROM reservations;
 -- id | room_id | reservation_period | booking_status
--- ---|---------|--------------------|--------------
--- 1  | 101     | [...]              | confirmed
+-- ----+---------+--------------------+---------------
+--  1 |   101   | [...]              | confirmed
+```
 
--- Tapi CTID tetap ada, harus explicitly select
+Ketika kita meminta CTID secara eksplisit:
+
+```sql
 SELECT ctid, * FROM reservations;
--- ctid  | id | room_id | reservation_period | booking_status
--- ------|----|---------|--------------------|---------------
--- (0,1) | 1  | 101     | [...]              | confirmed
--- (0,2) | 2  | 102     | [...]              | confirmed
--- (0,3) | 3  | 101     | [...]              | canceled
+-- ctid   | id | room_id | reservation_period | booking_status
+-- -------+----+---------+--------------------+---------------
+-- (0,1)  | 1  | 101     | [...]              | confirmed
+-- (0,2)  | 2  | 102     | [...]              | confirmed
+-- (0,3)  | 3  | 101     | [...]              | canceled
 ```
 
-**Penjelasan hasil:**
+Sekarang kita melihat CTID disajikan sebagai pasangan `(page, position)`.
+
+#### Penjelasan Hasil Query
+
+Kita bisa membaca CTID seperti berikut:
 
 ```
-(0,1) → Page 0, Position 1 → Entire row #1 exists here
-(0,2) → Page 0, Position 2 → Entire row #2 exists here
-(0,3) → Page 0, Position 3 → Entire row #3 exists here
+(0,1) → Page 0, Position 1 → Di sinilah row #1 disimpan
+(0,2) → Page 0, Position 2 → Di sinilah row #2 disimpan
+(0,3) → Page 0, Position 3 → Di sinilah row #3 disimpan
 ```
 
-**CTID memberikan physical disk location:**
+Artinya, PostgreSQL menyimpan ketiga row tersebut pada page yang sama (page 0) tetapi pada posisi yang berbeda di dalam page tersebut.
+
+#### CTID Memberikan Physical Disk Location
+
+Jika kita visualisasikan isi page di dalam database, kira-kira tampilannya seperti ini:
 
 ```
 Database di disk:
 
 Page 0:
-├─ Position 1: [1, 101, '[2024-09-01...]', 'confirmed']  ← Row dengan ctid (0,1)
-├─ Position 2: [2, 102, '[2024-09-02...]', 'confirmed']  ← Row dengan ctid (0,2)
-└─ Position 3: [3, 101, '[2024-09-03...]', 'canceled']   ← Row dengan ctid (0,3)
-
-Dengan CTID, bisa LANGSUNG jump ke physical location!
+├─ Position 1: [1, 101, '[2024-09-01...]', 'confirmed']   ← Row dengan ctid (0,1)
+├─ Position 2: [2, 102, '[2024-09-02...]', 'confirmed']   ← Row dengan ctid (0,2)
+└─ Position 3: [3, 101, '[2024-09-03...]', 'canceled']    ← Row dengan ctid (0,3)
 ```
+
+Dengan mengetahui CTID, PostgreSQL dapat **melompat langsung** ke lokasi fisik row tersebut. Tidak perlu scan tabel, tidak perlu mencari berdasarkan nilai kolom lain — cukup ambil `(page_number, position)` dan ambil row dari alamat itu. Inilah yang membuat CTID sangat penting dalam mekanisme internal PostgreSQL, khususnya untuk operasi seperti `UPDATE`, `DELETE`, atau saat index menunjuk langsung ke lokasi row di disk.
 
 ### e. Querying by CTID (dan Mengapa TIDAK Boleh Dilakukan)
 
-**Teknis bisa query by CTID:**
+#### Query dengan CTID: Bisa, Tapi Tidak Dianjurkan
+
+Secara teknis, PostgreSQL **memungkinkan** kita melakukan query berdasarkan CTID. Karena CTID menunjukkan lokasi fisik sebuah row, PostgreSQL bisa langsung melompat ke page dan position tersebut tanpa harus melakukan scan atau traversal index.
+
+Contoh:
 
 ```sql
 -- Ambil row di Page 0, Position 2
@@ -204,172 +321,235 @@ SELECT * FROM reservations WHERE ctid = '(0,2)';
 
 -- Result:
 -- id | room_id | reservation_period | booking_status
--- ---|---------|--------------------|--------------
--- 2  | 102     | [...]              | confirmed
+-- ---+---------+--------------------+---------------
+--  2 |   102   | [...]              | confirmed
 ```
 
-**⚠️ TAPI JANGAN LAKUKAN INI! Mengapa?**
+Secara performa, ini sangat cepat. Namun meskipun bisa, **tidak berarti aman digunakan**.
 
-**Alasan 1: CTIDs are VOLATILE (berubah-ubah)**
+#### Mengapa Tidak Boleh Query Berdasarkan CTID?
+
+Ada dua alasan utama: **CTID bersifat volatile** dan **dapat berubah kapan saja**.
+
+#### Alasan 1 — CTID Bersifat Volatile (Berubah setelah UPDATE)
+
+CTID adalah alamat fisik row, bukan identitas logis. Setelah sebuah row diubah—apalagi jika ukuran row menjadi lebih besar—PostgreSQL mungkin perlu memindahkan row tersebut ke page lain yang memiliki ruang cukup.
+
+Contoh:
 
 ```sql
--- Original location
+-- Cek lokasi awal row id = 1
 SELECT ctid, * FROM users WHERE id = 1;
--- ctid  | id | name
--- ------|----|---------
--- (0,2) | 1  | 'Alice'
+-- (0,2) | 1 | 'Alice'
 
--- UPDATE row (data jadi lebih besar)
+-- UPDATE membuat row lebih besar
 UPDATE users SET bio = 'Very long text...' WHERE id = 1;
 
--- CTID berubah!
+-- CTID berubah
 SELECT ctid, * FROM users WHERE id = 1;
--- ctid   | id | name
--- -------|----|---------
--- (84,5) | 1  | 'Alice'  ← Pindah ke Page 84!
+-- (84,5) | 1 | 'Alice'   ← Bergeser ke Page 84!
 ```
 
-**Mengapa CTID berubah?**
+Penjelasan:
 
-```
-Scenario:
-1. Row originally di Page 0, Position 2
-2. UPDATE membuat row lebih besar
-3. Page 0 tidak punya space cukup
-4. PostgreSQL move row ke Page 84 yang punya space
-5. CTID berubah dari (0,2) ke (84,5)
-```
+1. Row awal berada di `(0,2)`
+2. Setelah `UPDATE`, ukuran row bertambah
+3. Page 0 mungkin sudah padat dan tidak bisa menampung row yang lebih besar
+4. PostgreSQL memindahkan row ke page yang lebih longgar, misalnya Page 84
+5. CTID berubah menjadi `(84,5)`
 
-**Alasan 2: VACUUM merearrange rows**
+Jika pada awalnya Anda mengandalkan CTID `(0,2)`, maka identifier itu sudah tidak berlaku lagi.
+
+#### Alasan 2 — VACUUM Dapat Menyusun Ulang Row
+
+VACUUM bertugas membersihkan dead tuples dan mengompaktkan ruang dalam pages. Hal ini dapat menggeser row ke position lain atau memindahkannya antar page. Hasilnya, CTID dapat berubah meskipun Anda tidak melakukan UPDATE.
+
+Contoh:
 
 ```sql
--- Before VACUUM
+-- Sebelum VACUUM
 SELECT ctid, id FROM products;
--- ctid  | id
--- ------|----
 -- (0,1) | 1
--- (0,2) | 2  ← Deleted
+-- (0,2) | 2  ← Akan dihapus
 -- (0,3) | 3
 -- (5,8) | 4
 
 DELETE FROM products WHERE id = 2;
 
--- After VACUUM (cleanup dead tuples + compact space)
+-- Setelah VACUUM
 SELECT ctid, id FROM products;
--- ctid  | id
--- ------|----
 -- (0,1) | 1
--- (0,2) | 3  ← CTID berubah! Tadinya (0,3)
--- (0,3) | 4  ← CTID berubah! Tadinya (5,8)
+-- (0,2) | 3  ← Dulu (0,3)
+-- (0,3) | 4  ← Dulu (5,8)
 ```
 
-**Summary: JANGAN gunakan CTID sebagai identifier!**
+VACUUM mengompaktkan page untuk mengisi celah kosong, sehingga posisi row berubah. CTID yang lama tidak dapat dipakai lagi.
 
-| Karakteristik              | CTID                          | Primary Key      |
-| -------------------------- | ----------------------------- | ---------------- |
-| **Stable**                 | ❌ Berubah saat UPDATE/VACUUM | ✅ Tidak berubah |
-| **Deterministic**          | ❌ Unpredictable              | ✅ Deterministic |
-| **Volatile**               | ✅ Ya                         | ❌ Tidak         |
-| **Suitable as identifier** | ❌ TIDAK!                     | ✅ Ya            |
+#### Mengapa CTID Tidak Cocok sebagai Identifier?
 
-**Instruktur's warning:**
+CTID memang unik pada saat tertentu, namun:
 
-> "Don't do that. These CTIDs can and will change. They're not primary keys, they're not stable, they're not deterministic, they're volatile."
+- Tidak stabil
+- Berubah saat UPDATE
+- Berubah saat VACUUM
+- Bukan penentu identitas logis row
+- Sama sekali tidak cocok untuk referensi jangka panjang
+- Tidak dapat dipakai sebagai foreign key, constraint, atau lookup yang aman
+
+Bandingkan dengan primary key:
+
+| Karakteristik              | CTID                             | Primary Key  |
+| -------------------------- | -------------------------------- | ------------ |
+| **Stable**                 | ❌ Berubah setelah UPDATE/VACUUM | ✅ Tetap     |
+| **Deterministic**          | ❌ Tidak dapat diprediksi        | ✅ Konsisten |
+| **Volatile**               | ✅ Sangat volatile               | ❌ Tidak     |
+| **Suitable as identifier** | ❌ Sama sekali tidak             | ✅ Ya        |
+
+#### Peringatan dari Instruktur
+
+> “Don’t do that. These CTIDs can and will change. They’re not primary keys, they’re not stable, they’re not deterministic, they’re volatile.”
+
+Dengan kata lain, CTID memang berguna untuk memahami bagaimana PostgreSQL bekerja secara internal—terutama saat mempelajari storage dan indexing. Namun untuk aplikasi nyata, **selalu gunakan primary key**, bukan CTID.
 
 ### f. CTID sebagai Pointer dalam Index - The Missing Link!
 
-**Reveal: Apa itu "pointer" dalam index?**
+#### Apa yang Dimaksud dengan "Pointer" dalam Index?
+
+Pada video sebelumnya, muncul pertanyaan penting:
 
 ```
-Pertanyaan dari video sebelumnya:
 "Every index contains a pointer back to the table"
+```
 
-Jawaban sekarang:
+Bagian ini akhirnya terjawab sekarang:
+
+```
 "Every index contains the CTID"
 ```
 
-**CTID = The actual pointer!**
+Artinya, pointer yang dimaksud bukanlah alamat memori seperti di bahasa pemrograman, tetapi sebuah nilai khusus yang dikenal sebagai **CTID**.
+
+CTID inilah yang memberi tahu PostgreSQL di mana tepatnya sebuah row disimpan di dalam table.
+
+#### CTID = Pointer Sesungguhnya
+
+Di dalam index, setiap entry selalu berpasangan antara nilai yang diindeks dan CTID. Bentuknya kira-kira seperti ini:
 
 ```
 Index Entry:
 ┌─────────────────────────────┐
 │ Indexed value | CTID        │
 ├───────────────┼─────────────┤
-│ 'Smith'       | (0,10)      │  ← CTID adalah pointer!
+│ 'Smith'       | (0,10)      │  ← CTID = pointer!
 │ 'Johnson'     | (2,5)       │
 │ 'Williams'    | (5,8)       │
 └───────────────┴─────────────┘
 ```
 
-**Complete picture: Bagaimana index lookup bekerja**
+Format CTID berupa `(page, position)`.
+Misalnya `(0,10)` berarti:
+
+- page (halaman) ke-0 di heap/table
+- posisi row ke-10 pada halaman tersebut
+
+Jadi CTID adalah **koordinat** untuk langsung melompat ke row tertentu tanpa perlu melakukan scanning.
+
+#### Alur Lengkap: Bagaimana Index Lookup Bekerja dengan CTID
+
+Misalkan kita menjalankan query:
 
 ```sql
 SELECT * FROM users WHERE last_name = 'Smith';
 ```
 
-**Step-by-step dengan CTID:**
+Mari kita uraikan prosesnya langkah demi langkah.
+
+##### 1. PostgreSQL Menelusuri Index
+
+Database akan mulai mencari nilai `'Smith'` di index `idx_last_name`. Tergantung jenis index, pencarian ini dilakukan dengan:
+
+- binary search
+- atau tree traversal (misalnya pada B-tree)
+
+Setelah ketemu, kita mendapatkan pasangan berikut:
 
 ```
-Step 1: Traverse index idx_last_name
-        ↓
-        Binary search atau tree traversal
-        ↓
-        Found: 'Smith' → CTID: (0,10)
-
-Step 2: Use CTID as pointer
-        ↓
-        "Go to Page 0, Position 10"
-        ↓
-        Direct jump! No scanning needed.
-
-Step 3: Retrieve full row from table
-        ↓
-        Page 0, Position 10:
-        [id: 123, first: 'John', last: 'Smith', email: 'john@...']
-        ↓
-        Return to user
+'Smith' → CTID: (0,10)
 ```
 
-**Visualisasi complete flow:**
+##### 2. PostgreSQL Menggunakan CTID Sebagai Pointer
+
+CTID menunjukkan lokasi persis row tersebut.
+
+```
+"Go to Page 0, Position 10"
+```
+
+Ini adalah lompatan langsung (**direct jump**), tanpa scanning sama sekali.
+
+##### 3. PostgreSQL Mengambil Row Lengkap dari Table (Heap)
+
+Setelah tiba di page yang dimaksud, database membaca isi row:
+
+```
+[id: 123, first: 'John', last: 'Smith', email: 'john@...']
+```
+
+Row inilah yang kemudian dikembalikan sebagai hasil query.
+
+#### Visualisasi Alur Lookup Secara Utuh
 
 ```
 ┌──────────────────┐         ┌─────────────────────────┐
 │  Index           │         │  Table (Heap)           │
 │  (idx_last_name) │         │                         │
 ├──────────────────┤         │  Page 0:                │
-│ 'Johnson' (2,5)  │         │  ├─ Pos 10: [Smith...] │◄─┐
+│ 'Johnson' (2,5)  │         │  ├─ Pos 10: [Smith...]  │◄─┐
 │ 'Smith'   (0,10) │─────────┼──┘                      │  │
 │ 'Williams'(5,8)  │         │  Page 2:                │  │
 └──────────────────┘         │  ├─ Pos 5: [Johnson...] │  │
         ↓                    │                         │  │
    1. Find 'Smith'           │  Page 5:                │  │
-   2. Get CTID: (0,10)       │  └─ Pos 8: [Williams..]│  │
-   3. Jump to table ─────────────────────────────────────┘
+   2. Get CTID: (0,10)       │  └─ Pos 8: [Williams..] │  │
+   3. Jump to table ──────────────────────────────────────┘
 ```
 
-**Mengapa ini sangat efisien?**
+Diagram di atas menggambarkan hubungan antara struktur index dan lokasi row di dalam table. Setiap langkah lookup menjadi sangat efisien karena CTID menyediakan koordinat yang tepat.
+
+#### Mengapa CTID Membuat Proses Lookup Sangat Efisien?
+
+Tanpa CTID (secara teoretis):
 
 ```
-Without CTID (theoretical):
-Query → Index → "I found 'Smith' somewhere"
-     → Must scan entire table to find it
-     → O(n) complexity for table scan
-
-With CTID (actual):
-Query → Index → "I found 'Smith' at (0,10)"
-     → Direct jump to Page 0, Position 10
-     → O(1) complexity for row retrieval
+Query  → Index → "I found 'Smith' somewhere"
+       → Harus scan seluruh table untuk menemukannya
+       → Kompleksitas: O(n)
 ```
+
+Dengan CTID (realita di PostgreSQL):
+
+```
+Query  → Index → "I found 'Smith' at (0,10)"
+       → Langsung lompat ke Page 0, Position 10
+       → Kompleksitas: O(1)
+```
+
+Inilah inti performa index: bukan hanya menemukan nilai yang dicari, tetapi menyediakan **pointer langsung** menuju lokasi row di table.
 
 ### g. Key Insight: Index Storage vs Table Storage
 
-**Index stores:**
+#### Apa yang Disimpan oleh Index
+
+Index bukanlah salinan lengkap dari table. Struktur ini hanya menyimpan informasi yang diperlukan untuk melakukan pencarian cepat. Secara khusus, isi index terdiri dari dua hal penting:
 
 ```
-1. Indexed column value(s)
-2. CTID (pointer to table)
+1. Nilai dari kolom yang di-index
+2. CTID (pointer menuju lokasi row di table)
+```
 
-Example for idx_last_name:
+Sebagai contoh, untuk index `idx_last_name`:
+
+```
 ┌──────────┬────────┐
 │ last_name│ CTID   │
 ├──────────┼────────┤
@@ -378,55 +558,98 @@ Example for idx_last_name:
 └──────────┴────────┘
 ```
 
-**Table stores:**
+Di sini terlihat jelas bahwa index hanya menyimpan **nilai kolom yang diindeks** dan **CTID** sebagai penunjuk lokasi fisik row yang sebenarnya ada di table. Tidak ada kolom lain, tidak ada data tambahan.
+
+#### Apa yang Disimpan oleh Table (Heap Storage)
+
+Table, atau lebih tepatnya _heap_, adalah tempat penyimpanan data sebenarnya. Semua kolom dan seluruh isi row disimpan secara lengkap pada lokasi fisik tertentu, yaitu halaman (page) dan posisi (offset) di dalam halaman tersebut.
+
+Contohnya, CTID `(0,10)` berarti baris tersebut berada di:
 
 ```
-Complete row data at physical location
-
 Page 0, Position 10:
 [id: 123, first_name: 'John', last_name: 'Smith',
  email: 'john@example.com', created_at: '2024-01-01', ...]
 ```
 
-**Division of labor:**
+Index hanya memberi tahu **di mana** datanya berada. Table-lah yang menyimpan **apa** datanya.
 
-| Component | Responsibility               | Optimization                        |
-| --------- | ---------------------------- | ----------------------------------- |
-| **Index** | Fast lookup by indexed value | B-tree, sorted, optimized traversal |
-| **CTID**  | Bridge between index & table | Direct physical address             |
-| **Heap**  | Store complete row data      | Fast writes, flexible storage       |
+#### Pembagian Peran: Kenapa Harus Dipisah?
+
+Kedua komponen ini bekerja sama, tetapi masing-masing memiliki tanggung jawab yang berbeda agar sistem tetap cepat dan efisien.
+
+| Component | Responsibility                                                  | Optimization                                                                           |
+| --------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Index** | Melakukan pencarian cepat berdasarkan nilai kolom yang diindeks | Memanfaatkan struktur B-tree dan urutan data untuk traversal cepat                     |
+| **CTID**  | Menjadi jembatan antara index dan table                         | Memberikan alamat fisik yang tepat, sehingga PostgreSQL dapat melompat langsung ke row |
+| **Heap**  | Menyimpan data lengkap dari setiap row                          | Optimized untuk operasi tulis (insert/update) serta penyimpanan yang fleksibel         |
+
+Pembagian tugas ini membuat query dapat berjalan cepat: index menemukan nilai dengan efisien, CTID memberikan lokasi tepat, dan heap menyediakan data lengkapnya.
 
 ### h. Implications untuk Index Design
 
-**Sekarang kita tahu:**
+#### Pemahaman Dasar yang Sekarang Kita Miliki
 
-1. **Index HARUS store CTID**
+Setelah memahami bahwa setiap index menyimpan pasangan **nilai yang diindeks** dan **CTID**, kita bisa mulai melihat konsekuensi desainnya. Informasi ini sangat penting karena menentukan ukuran index, performa query, serta strategi indexing yang tepat.
 
-   ```
-   Index size = (indexed data) + (CTID per entry)
+#### 1. Index Selalu Menyimpan CTID
 
-   CTID size: 6 bytes (4 bytes page + 2 bytes position)
-   ```
+Setiap entry dalam index wajib memiliki CTID sebagai pointer ke lokasi fisik row di tabel. Artinya, berapa pun ukuran nilai yang diindeks, selalu ada tambahan 6 byte untuk CTID.
 
-2. **Index overhead**
+```
+Index size = (indexed data) + (CTID per entry)
 
-   ```
-   Every index entry = indexed value + 6 bytes CTID
+Ukuran CTID:
+- 4 bytes untuk page number
+- 2 bytes untuk position dalam page
+```
 
-   Example:
-   - Index on INTEGER (4 bytes) → 4 + 6 = 10 bytes per entry
-   - Index on TEXT (avg 20 bytes) → 20 + 6 = 26 bytes per entry
-   ```
+Dengan kata lain, semakin banyak baris dan semakin besar nilai yang diindeks, semakin besar pula index yang terbentuk.
 
-3. **Covering indexes (hint untuk nanti)**
+#### 2. Overhead yang Harus Diperhitungkan
 
-   ```
-   Normal index: value + CTID
-   Covering index: value + additional columns + CTID
+Karena setiap entry memiliki tambahan 6 byte, total ukuran index bisa dihitung secara sederhana sebagai berikut:
 
-   Benefit: Bisa return data dari index saja tanpa table lookup!
-   (Will be covered in later videos)
-   ```
+```
+Every index entry = indexed value + 6 bytes CTID
+```
+
+Contoh hitungan:
+
+- Jika Anda mengindeks kolom **INTEGER (4 bytes)**:
+
+  ```
+  Total per entry = 4 + 6 = 10 bytes
+  ```
+
+- Jika Anda mengindeks kolom **TEXT dengan panjang rata-rata 20 bytes**:
+
+  ```
+  Total per entry = 20 + 6 = 26 bytes
+  ```
+
+Konsekuensinya, index pada kolom TEXT biasanya jauh lebih besar dibanding index pada kolom berbasis angka. Ini penting ketika Anda merancang index pada tabel besar, karena ukuran index berpengaruh langsung pada performa dan penggunaan memori.
+
+#### 3. Covering Indexes (Teaser untuk Pembahasan Berikutnya)
+
+Untuk memahami desain index yang lebih canggih, kita perlu mengenal konsep **covering index**.
+
+```
+Normal index: hanya menyimpan indexed value + CTID
+
+Covering index: menyimpan indexed value + kolom tambahan + CTID
+```
+
+Manfaatnya sangat signifikan:
+
+- PostgreSQL dapat memenuhi hasil query langsung dari index
+- Tidak perlu melakukan table lookup ke heap
+- Mengurangi random I/O dan mempercepat query secara drastis
+
+Contoh intuitifnya:
+Jika sebuah query hanya membutuhkan kolom yang sudah tersedia dalam index, PostgreSQL dapat memprosesnya tanpa membaca table sama sekali.
+
+Konsep ini akan dibahas lebih mendalam pada materi berikutnya, tetapi sudah cukup untuk memahami bahwa desain index bukan hanya soal “apa yang sering di-query”, melainkan juga soal “apakah query dapat dipenuhi langsung dari index”.
 
 ## 3. Hubungan Antar Konsep
 
