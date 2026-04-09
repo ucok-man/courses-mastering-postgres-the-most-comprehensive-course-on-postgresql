@@ -8,56 +8,102 @@ Video ini membahas UUID (Universally Unique Identifier) sebagai tipe data di Pos
 
 ### a. UUID sebagai Tipe Data
 
-UUID di PostgreSQL adalah tipe data native yang menyimpan 128-bit identifier dengan format standar.
+UUID (Universally Unique Identifier) di PostgreSQL adalah **tipe data native** yang digunakan untuk menyimpan identifier unik berukuran **128-bit**. Karena bersifat native, PostgreSQL tidak memperlakukan UUID sebagai teks biasa, melainkan sebagai data biner yang sudah dioptimalkan di level database.
 
-**Karakteristik UUID:**
+Penggunaan UUID sangat umum pada sistem terdistribusi, karena peluang terjadinya duplikasi (collision) sangat kecil, bahkan tanpa koordinasi antar sistem.
 
-- Fixed-size: **16 bytes storage** (raw binary)
-- Display format: 8-4-4-4-12 hex digits (36 characters dengan hyphens)
-- Internal storage: **Binary format tanpa hyphens atau ASCII characters**
-- Universally unique (collision probability sangat rendah)
-- Native type dengan optimasi khusus
+#### Karakteristik UUID di PostgreSQL
+
+Beberapa karakteristik penting UUID yang perlu dipahami:
+
+- **Fixed-size**: selalu disimpan dalam ukuran tetap **16 bytes**
+- **Format tampilan standar**: 8-4-4-4-12 digit heksadesimal (total 36 karakter, termasuk hyphen)
+- **Penyimpanan internal**: disimpan sebagai **binary murni**, tanpa hyphen dan tanpa ASCII
+- **Universally unique**: sangat kecil kemungkinan terjadi duplikasi
+- **Native type**: PostgreSQL memiliki optimasi khusus untuk UUID (bukan sekadar text)
+
+Poin penting di sini adalah perbedaan antara **cara data disimpan** dan **cara data ditampilkan**. Meskipun UUID sering terlihat seperti string, sebenarnya PostgreSQL menyimpannya dalam bentuk biner.
+
+#### Contoh Penggunaan UUID di PostgreSQL
+
+Mari kita lihat bagaimana PostgreSQL menangani UUID secara nyata.
 
 ```sql
 -- Membuat table dengan UUID column
 CREATE TABLE uuid_example (
     uuid_value UUID
 );
+```
 
+Pada contoh di atas, kolom `uuid_value` didefinisikan langsung dengan tipe `UUID`, bukan `TEXT` atau `VARCHAR`.
+
+```sql
 -- Insert UUID sebagai string (auto-converted to binary)
 INSERT INTO uuid_example VALUES ('550e8400-e29b-41d4-a716-446655440000');
+```
 
+Walaupun kita melakukan `INSERT` menggunakan string, PostgreSQL akan **secara otomatis mengonversinya** menjadi representasi biner internal. Artinya, format string ini hanya digunakan sebagai input, bukan sebagai format penyimpanan.
+
+```sql
 -- View data (displayed as formatted string)
 SELECT * FROM uuid_example;
 -- Output: 550e8400-e29b-41d4-a716-446655440000
+```
 
+Saat data ditampilkan dengan `SELECT`, PostgreSQL akan mengonversi kembali nilai biner tersebut ke format UUID yang umum dikenal (dengan hyphen). Ini murni untuk keperluan **display**.
+
+```sql
 -- Cek tipe data
 SELECT pg_typeof(uuid_value) FROM uuid_example;
 -- Output: uuid (bukan text!)
+```
 
+Query ini menegaskan bahwa kolom tersebut memang bertipe `uuid`, bukan `text`. Ini penting karena tipe data memengaruhi cara PostgreSQL mengelola indexing, perbandingan, dan performa.
+
+```sql
 -- Cek storage size
 SELECT pg_column_size(uuid_value) FROM uuid_example;
 -- Output: 16 bytes ✅ (stored as raw binary)
 ```
 
-**Format UUID:**
+Hasil `16 bytes` menunjukkan bahwa UUID disimpan dalam ukuran tetap dan efisien, tanpa overhead tambahan seperti karakter `-` atau encoding string.
+
+#### Format UUID: Tampilan vs Penyimpanan
+
+UUID biasanya ditampilkan dalam format berikut:
 
 ```
-Display format (string representation):
 3e25960a-79db-c69b-674c-d4ec67a72c62
 └──┬───┘ └─┬┘ └─┬┘ └─┬┘ └────┬─────┘
    │       │    │    │       │
 8 digits   4    4    4    12 digits
-
-Total: 32 hex digits + 4 hyphens = 36 characters (for display only)
-Storage: 16 bytes (128 bits pure binary, NO hyphens stored!)
 ```
 
-**⚠️ PENTING:** PostgreSQL menyimpan UUID sebagai **raw 16-byte binary value**, bukan sebagai string dengan hyphens. Hyphens hanya muncul saat display/conversion ke text.
+Penjelasan format tersebut:
+
+- Total **32 digit heksadesimal**
+- Ditambah **4 hyphen**
+- Total tampilan menjadi **36 karakter**
+
+Namun, format ini **hanya berlaku saat UUID direpresentasikan sebagai teks**. Di level penyimpanan:
+
+- PostgreSQL **tidak menyimpan hyphen**
+- Tidak menyimpan dalam bentuk ASCII
+- Seluruh nilai UUID disimpan sebagai **128-bit (16 bytes) binary data**
+
+#### Hal Penting yang Perlu Diingat
+
+PostgreSQL menyimpan UUID sebagai **raw 16-byte binary value**, bukan sebagai string. Hyphen dan format 36 karakter hanya digunakan saat UUID ditampilkan atau dikonversi ke tipe teks. Memahami perbedaan ini penting agar tidak salah kaprah saat membandingkan UUID dengan tipe `TEXT`, mengukur ukuran kolom, atau mengoptimalkan performa database.
 
 ### b. UUID vs TEXT: Storage Efficiency
 
-Storing UUID sebagai native type jauh lebih efisien dari TEXT.
+Menyimpan UUID sebagai **tipe data native `UUID`** jauh lebih efisien dibandingkan menyimpannya sebagai `TEXT`. Perbedaan ini bukan sekadar teori, tetapi benar-benar terasa pada ukuran storage, performa query, dan efisiensi index, terutama ketika jumlah data semakin besar.
+
+Untuk memahami alasannya, kita perlu melihat bagaimana PostgreSQL menyimpan UUID dan TEXT di level internal.
+
+#### Perbandingan Ukuran Storage UUID vs TEXT
+
+Mari kita bandingkan ukuran storage dari nilai UUID yang sama, satu disimpan sebagai `UUID` dan satu lagi dikonversi ke `TEXT`.
 
 ```sql
 -- Perbandingan storage size
@@ -65,467 +111,642 @@ SELECT
     pg_column_size(uuid_value) AS uuid_type_size,
     pg_column_size(uuid_value::TEXT) AS text_type_size
 FROM uuid_example;
-
--- Output:
--- uuid_type_size: 16 bytes  ✅
--- text_type_size: 37-40 bytes (typically 40)  ❌
-
--- Breakdown TEXT size:
--- - 36 bytes untuk string '550e8400-e29b-41d4-a716-446655440000'
--- - 1-4 bytes untuk varlena header (varies by PostgreSQL version)
--- - Potential padding untuk memory alignment
--- Total: typically 40 bytes (can vary 37-40)
-
--- UUID native: 16 bytes (raw 128-bit binary storage)
--- NO overhead, NO padding, pure data ✅
 ```
 
-**Impact pada Large Tables:**
+Hasil yang umumnya didapat:
+
+```text
+uuid_type_size: 16 bytes  ✅
+text_type_size: 37–40 bytes (typically 40) ❌
+```
+
+Artinya, satu nilai UUID yang sama bisa memakan **lebih dari dua kali lipat storage** hanya karena disimpan sebagai TEXT.
+
+#### Kenapa TEXT Bisa Jauh Lebih Besar?
+
+UUID dalam bentuk TEXT disimpan sebagai string biasa, sehingga ada beberapa komponen tambahan yang ikut tersimpan:
+
+- **36 bytes** untuk string UUID itu sendiri
+  (`550e8400-e29b-41d4-a716-446655440000`)
+- **1–4 bytes** untuk _varlena header_ (metadata panjang data, tergantung versi PostgreSQL)
+- **Potensi padding** untuk kebutuhan alignment memori
+
+Jika dijumlahkan, ukuran TEXT biasanya berada di kisaran **37–40 bytes**, dengan **40 bytes** sebagai kasus yang paling umum.
+
+Sebaliknya, UUID native:
+
+- Disimpan sebagai **128-bit binary**
+- Ukurannya selalu **16 bytes**
+- Tidak ada header varlena
+- Tidak ada padding tambahan
+- Tidak ada karakter hyphen yang disimpan
+
+Hasilnya adalah penyimpanan yang benar-benar efisien dan konsisten.
+
+#### Dampak Nyata pada Tabel Berukuran Besar
+
+Perbedaan ini menjadi sangat signifikan saat kita bekerja dengan tabel besar. Misalnya, tabel dengan 10 juta baris.
 
 ```sql
 -- Example: 10 million users
 CREATE TABLE users_text (
     id TEXT  -- UUID sebagai TEXT: ~40 bytes average
 );
--- Total: 10M × 40 bytes = 400 MB
+```
 
+Perkiraan kebutuhan storage:
+
+- 10.000.000 × 40 bytes = **400 MB**
+
+Bandingkan dengan penggunaan UUID native:
+
+```sql
 CREATE TABLE users_uuid (
     id UUID  -- UUID sebagai UUID: 16 bytes
 );
--- Total: 10M × 16 bytes = 160 MB
-
--- Savings: 240 MB (60% reduction!) ✅
--- Additional benefits:
--- - Faster comparison (binary vs string)
--- - More efficient indexing (smaller index)
--- - Better cache utilization
 ```
+
+Perkiraan kebutuhan storage:
+
+- 10.000.000 × 16 bytes = **160 MB**
+
+Artinya, ada penghematan sekitar:
+
+- **240 MB**
+- Sekitar **60% lebih kecil** hanya dari satu kolom ID
+
+#### Manfaat Tambahan Selain Ukuran Storage
+
+Selain penghematan storage, penggunaan UUID native juga membawa keuntungan lain:
+
+- **Perbandingan lebih cepat**, karena dilakukan pada data biner, bukan string
+- **Index lebih kecil dan efisien**, karena ukuran key lebih kecil
+- **Cache utilization lebih baik**, lebih banyak data yang bisa masuk ke memory buffer
+- Query yang melibatkan JOIN atau WHERE berbasis UUID cenderung lebih optimal
+
+Kesimpulannya, menyimpan UUID sebagai `UUID` bukan hanya praktik yang lebih “benar”, tetapi juga keputusan teknis yang berdampak langsung pada efisiensi, performa, dan skalabilitas sistem database.
 
 ### c. Universally Unique: Collision Probability
 
-UUID dirancang untuk uniqueness tanpa koordinasi.
+Salah satu keunggulan utama UUID adalah kemampuannya menghasilkan identifier yang **unik secara global**, tanpa perlu koordinasi antar sistem. Artinya, setiap sistem bisa membuat ID sendiri-sendiri, kapan pun, di mana pun, tanpa harus “bertanya” ke server pusat.
 
-**Collision Probability:**
+Agar ini masuk akal secara teknis, kita perlu memahami seberapa besar ruang kemungkinan UUID dan seberapa kecil peluang terjadinya tabrakan (collision).
 
-```
-**Ukuran ruang UUID:**
-UUID punya kemungkinan kombinasi sebanyak **2^128**, atau sekitar
-**340 triliun-triliun-triliun** kemungkinan unik. Sangat banyak.
+#### Ukuran Ruang UUID
 
-**Untuk UUID versi 4 (yang acak):**
-Bagian acaknya adalah **122 bit**, jadi total kemungkinan acak sekitar
-**2^122 ≈ 5,3 × 10³⁶** — angka ini juga sangat besar.
+UUID memiliki ukuran **128 bit**, yang berarti jumlah kombinasi unik yang mungkin adalah:
 
-**Kemungkinan tabrakan (dua UUID sama):**
-Kalau kamu membuat **1 triliun (10¹²)** UUID, peluang ada yang sama itu kira-kira
-**1 banding 100 miliar** — alias hampir mustahil.
+- **2¹²⁸ kemungkinan**
+- Secara kasar setara dengan **340 triliun-triliun-triliun** nilai unik
 
-**Menurut “paradoks ulang tahun”:**
-Kamu perlu membuat sekitar **2,6 miliar UUID** baru sebelum peluang tabrakan mencapai **50%**.
-Dalam dunia nyata, itu **sangat tidak mungkin terjadi**.
+Angka ini sangat besar, jauh melampaui jumlah objek yang biasanya kita kelola dalam sistem apa pun di dunia nyata.
 
-**Sebagai perbandingan, kamu lebih mungkin untuk:**
+#### UUID Versi 4 dan Sumber Keacakannya
 
-* Disambar petir **lebih dari 40 kali dalam sehari**
-* **Menang lotre 5 kali berturut-turut**
-* Menemukan **satu atom tertentu dari seluruh atom dalam tubuhmu**
-```
+UUID versi 4 (UUID v4) adalah jenis UUID yang paling sering digunakan, karena dihasilkan secara acak.
 
-**Why Universally Unique Matters:**
+Pada UUID v4:
 
-```
-Scenario: Multi-system ID generation
+- **122 bit** digunakan sebagai bit acak
+- Sisanya digunakan untuk informasi versi dan varian
 
-System A (Server 1)     System B (Server 2)     System C (Client App)
-    ↓                        ↓                        ↓
-Generate UUID           Generate UUID           Generate UUID
-    ↓                        ↓                        ↓
-No coordination needed! ✅
-All IDs guaranteed unique ✅
-Can merge data later without conflicts ✅
-No network calls required ✅
-```
+Artinya, jumlah kemungkinan UUID acak yang benar-benar tersedia adalah:
+
+- **2¹²² ≈ 5,3 × 10³⁶ kemungkinan**
+
+Meskipun sedikit lebih kecil dari 2¹²⁸, angka ini tetap luar biasa besar dan praktis tak terbatas untuk kebutuhan sistem modern.
+
+#### Peluang Terjadinya Collision
+
+Collision terjadi ketika dua UUID yang dihasilkan memiliki nilai yang sama. Secara teori hal ini mungkin, tetapi secara praktis peluangnya sangat kecil.
+
+Sebagai gambaran:
+
+- Jika kamu menghasilkan **1 triliun (10¹²) UUID**
+- Peluang setidaknya ada dua UUID yang sama kira-kira **1 banding 100 miliar**
+
+Dengan kata lain, peluangnya nyaris bisa diabaikan dalam konteks aplikasi nyata.
 
 ### d. Use Cases untuk UUID
 
-UUID sangat berguna untuk specific scenarios.
+UUID paling terasa manfaatnya ketika digunakan pada skenario-skenario tertentu yang memang sulit atau tidak efisien jika memakai ID berurutan (sequential ID). Di bawah ini adalah beberapa use case paling umum dan paling masuk akal secara teknis.
 
-#### ✅ Use Case 1: Distributed Systems
+#### Use Case 1: Distributed Systems
+
+Pada arsitektur microservices, setiap service biasanya berjalan di database terpisah dan dikembangkan secara independen. Dalam kondisi seperti ini, UUID menjadi solusi ideal untuk pembuatan ID.
 
 ```sql
--- Microservices architecture
 -- Service A: Order Service
 CREATE TABLE orders (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     customer_id UUID,
     total NUMERIC
 );
+```
 
--- Service B: Shipping Service (different database)
+Service Order di atas bisa menghasilkan `id` sendiri tanpa bergantung pada sistem lain.
+
+```sql
+-- Service B: Shipping Service (database berbeda)
 CREATE TABLE shipments (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     order_id UUID,  -- Reference ke order dari Service A
     tracking_number TEXT
 );
-
--- Keuntungan:
--- - Generate ID independently di setiap service ✅
--- - No central ID coordinator needed ✅
--- - No network overhead untuk ID generation ✅
--- - Easy to merge/sync data antar services ✅
--- - Service decoupling ✅
 ```
 
-#### ✅ Use Case 2: Client-Side Generation
+Service Shipping juga melakukan hal yang sama. Meskipun database-nya berbeda, UUID yang dihasilkan tetap aman untuk digunakan sebagai referensi silang (`order_id`).
 
-```sql
--- Frontend generates ID sebelum server insert
--- JavaScript (modern browsers):
+Keuntungan pendekatan ini:
+
+- Setiap service bisa **generate ID secara mandiri**
+- Tidak diperlukan **central ID generator**
+- Tidak ada **network overhead** hanya untuk mendapatkan ID
+- Data dari berbagai service bisa **digabung atau disinkronkan** tanpa konflik
+- Antar service tetap **loosely coupled**
+
+Inilah alasan UUID sangat populer pada sistem terdistribusi.
+
+#### Use Case 2: Client-Side Generation
+
+UUID juga sangat cocok digunakan ketika ID dibuat di sisi client (browser atau mobile app), bahkan sebelum data dikirim ke server.
+
+```javascript
+// JavaScript (modern browsers)
 const newId = crypto.randomUUID();
 // Output: '550e8400-e29b-41d4-a716-446655440000'
-
--- Send to server
-fetch('/api/items', {
-    method: 'POST',
-    body: JSON.stringify({
-        id: newId,
-        name: 'New Item'
-    })
-});
-
--- PostgreSQL accepts ID yang sudah di-generate:
-INSERT INTO items (id, name)
-VALUES ('550e8400-e29b-41d4-a716-446655440000', 'New Item');
-
--- Keuntungan:
--- - Optimistic UI updates (show ID immediately) ✅
--- - Offline-first applications ✅
--- - No server roundtrip untuk get ID ✅
--- - Reduced server load ✅
--- - Better user experience (instant feedback) ✅
 ```
 
-#### ✅ Use Case 3: Multiple Databases Sync
+UUID ini kemudian dikirim ke server bersama payload lainnya:
+
+```javascript
+fetch("/api/items", {
+  method: "POST",
+  body: JSON.stringify({
+    id: newId,
+    name: "New Item",
+  }),
+});
+```
+
+Di sisi database, PostgreSQL dapat langsung menerima UUID tersebut:
+
+```sql
+INSERT INTO items (id, name)
+VALUES ('550e8400-e29b-41d4-a716-446655440000', 'New Item');
+```
+
+Manfaat utama pendekatan ini:
+
+- **Optimistic UI updates**, UI bisa langsung menampilkan data baru
+- Mendukung **offline-first application**
+- Tidak perlu roundtrip ke server hanya untuk meminta ID
+- **Beban server berkurang**
+- Pengalaman pengguna lebih baik karena respons terasa instan
+
+Pendekatan ini hampir mustahil dilakukan dengan auto-increment ID.
+
+#### Use Case 3: Multiple Databases Sync
+
+UUID sangat ideal ketika data berasal dari banyak database dan perlu digabung di kemudian hari.
 
 ```sql
 -- Database 1 (Production - US East)
 INSERT INTO users (id, email)
 VALUES ('550e8400-e29b-41d4-a716-446655440000', 'user@example.com');
+```
 
+```sql
 -- Database 2 (Production - EU West)
 INSERT INTO users (id, email)
 VALUES ('1a2b3c4d-5e6f-7890-abcd-1234567890ab', 'eu-user@example.com');
+```
 
--- Database 3 (Analytics/Data Warehouse)
--- Merge data from both regions:
+Ketika data dari dua region ini digabung ke database analitik:
+
+```sql
 INSERT INTO users_analytics
 SELECT * FROM us_east_users
 UNION ALL
 SELECT * FROM eu_west_users;
--- No ID conflicts! ✅
-
--- Use cases:
--- - Multi-region deployments
--- - Database replication
--- - Data warehousing
--- - Backup/restore scenarios
 ```
 
-#### ⚠️ Use Case 4: Public IDs (dengan caveats importantes)
+Proses merge ini berjalan aman tanpa konflik ID, karena setiap UUID dijamin unik secara global.
 
-```sql
--- Expose UUID ke public (URLs, APIs)
--- Advantage: Not sequential (harder to enumerate)
--- https://api.example.com/users/550e8400-e29b-41d4-a716-446655440000
+Skenario ini umum pada:
 
--- vs sequential IDs:
--- https://api.example.com/users/12345
--- https://api.example.com/users/12346 (easy to guess! ❌)
--- https://api.example.com/users/12347 (attacker can scrape all!)
+- Multi-region deployment
+- Database replication
+- Data warehouse dan analytics
+- Backup dan restore lintas environment
 
--- ⚠️ IMPORTANT CAVEATS:
--- 1. UUID v4: Fully random (good for security by obscurity)
--- 2. UUID v7: Contains timestamp (can be predicted/estimated!)
--- 3. NEVER rely on UUID alone for security
--- 4. Always implement proper authentication & authorization
--- 5. Rate limiting still necessary
--- 6. UUID ≠ security token, it's just an identifier
+#### Use Case 4: Public IDs (dengan Catatan Penting)
 
--- Example attack pada UUID v7:
--- If created at 2024-01-01 10:00:00
--- UUID starts with: 018d0... (timestamp portion)
--- Attacker can estimate: "UUIDs probably between 018d0... and 018d1..."
--- Still need proper auth! ✅
+UUID sering digunakan sebagai ID publik, misalnya di URL atau API endpoint.
+
+```text
+https://api.example.com/users/550e8400-e29b-41d4-a716-446655440000
 ```
+
+Bandingkan dengan ID berurutan:
+
+```text
+https://api.example.com/users/12345
+https://api.example.com/users/12346
+https://api.example.com/users/12347
+```
+
+ID berurutan sangat mudah ditebak dan dieksplorasi, sedangkan UUID jauh lebih sulit untuk dienumerasi secara massal.
+
+Namun, ada beberapa **caveat penting** yang wajib dipahami:
+
+- UUID v4 bersifat acak, relatif aman untuk diekspos
+- UUID v7 mengandung timestamp, sehingga bisa diperkirakan rentang nilainya
+- UUID **bukan mekanisme keamanan**
+- Jangan pernah mengandalkan UUID sebagai pengganti autentikasi
+- Tetap wajib menerapkan authorization yang benar
+- Rate limiting tetap diperlukan
+
+Sebagai contoh, pada UUID v7:
+
+- Jika UUID dibuat pada waktu tertentu
+- Bagian awal UUID mencerminkan timestamp
+- Penyerang bisa memperkirakan rentang UUID yang mungkin ada
+
+Kesimpulannya, UUID sangat cocok sebagai identifier publik, tetapi **keamanan tetap harus ditangani di layer lain**. UUID hanya berfungsi sebagai identitas, bukan sebagai security token.
 
 ### e. Generating UUIDs di PostgreSQL
 
-PostgreSQL menyediakan built-in function untuk UUID generation.
+PostgreSQL menyediakan beberapa cara untuk menghasilkan UUID secara langsung di level database. Pemilihan metode dan versi UUID sangat penting, karena berpengaruh pada performa, pola indexing, dan karakteristik data yang dihasilkan.
 
-#### UUID v4: Random (Built-in) ✅
+Di bagian ini kita akan membahas dua versi UUID yang paling relevan: **UUID v4** dan **UUID v7**, beserta kapan sebaiknya masing-masing digunakan.
+
+#### UUID v4: Random (Built-in)
+
+UUID v4 adalah UUID yang dihasilkan secara acak. Ini adalah opsi paling umum dan paling mudah digunakan di PostgreSQL.
 
 ```sql
 -- Generate random UUID (version 4)
 -- Available di semua PostgreSQL versions (9.4+)
 SELECT gen_random_uuid();
--- Output example: 9b8c7e6d-5f4a-4b3c-9d8e-7f6a5b4c3d2e
+```
 
--- Setiap call generates UUID baru
+Setiap pemanggilan fungsi ini akan menghasilkan UUID baru yang berbeda.
+
+```sql
 SELECT gen_random_uuid();
--- Output: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d (berbeda!)
-
 SELECT gen_random_uuid();
--- Output: a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d (berbeda lagi!)
+```
 
--- Use sebagai default value
+Hasilnya selalu unik dan tidak bisa diprediksi.
+
+UUID v4 sangat sering digunakan sebagai nilai default kolom `id`.
+
+```sql
 CREATE TABLE items (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     name TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT NOW()
 );
+```
 
--- Insert tanpa specify ID
+Dengan definisi ini, kita bisa melakukan insert tanpa menyebutkan ID secara eksplisit.
+
+```sql
 INSERT INTO items (name) VALUES ('Item 1');
 INSERT INTO items (name) VALUES ('Item 2');
--- IDs auto-generated! ✅
-
-SELECT * FROM items;
--- id                                   | name   | created_at
--- 9b8c7e6d-5f4a-4b3c-9d8e-7f6a5b4c3d2e | Item 1 | 2024-03-15 10:30:00
--- 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d | Item 2 | 2024-03-15 10:30:01
 ```
 
-**UUID v4 Characteristics:**
-
-- **Fully pseudorandom:** 122 bits of randomness
-  - 128 total bits
-  - minus 4 bits for version field (set to `0100` = 4)
-  - minus 2 bits for variant field (set to `10`)
-  - = **122 bits pseudorandom**
-- **No sortable property** (completely random order)
-- **❌ BAD sebagai primary key** (causes index fragmentation - akan dijelaskan nanti)
-- **✅ OK untuk secondary identifiers** (correlation IDs, tracking IDs, etc)
-- **✅ Best for security by obscurity** (unpredictable)
-
-#### UUID v7: Sortable (PostgreSQL 17+ or Extension) ⚠️
+PostgreSQL akan otomatis mengisi kolom `id` dengan UUID baru.
 
 ```sql
--- ⚠️ UUID v7 AVAILABILITY:
+SELECT * FROM items;
+```
 
--- Option 1: PostgreSQL 17+ (built-in)
--- Available: November 2024+
-SELECT gen_random_uuid_v7();  -- Native function ✅
+Hasilnya menunjukkan bahwa setiap baris memiliki UUID unik yang dihasilkan secara otomatis, lengkap dengan timestamp pembuatan data.
 
--- Option 2: Extension (PostgreSQL < 17)
--- Popular extensions:
--- - pg_uuidv7 (community extension)
--- - pgcrypto + custom function
--- - Some cloud providers (AWS RDS, Google Cloud SQL) may include v7
+#### Karakteristik UUID v4
 
--- Install pg_uuidv7 extension (example):
+UUID v4 memiliki sifat-sifat berikut:
+
+- Menggunakan **122 bit pseudorandom**
+
+  - Total UUID adalah 128 bit
+  - 4 bit digunakan untuk penanda versi (`0100`)
+  - 2 bit digunakan untuk varian (`10`)
+  - Sisanya murni bit acak
+
+- Urutan UUID **tidak memiliki keterkaitan waktu**
+- Nilainya benar-benar acak dan tidak bisa ditebak
+- Cocok untuk **identifier sekunder** seperti correlation ID atau tracking ID
+- Baik untuk skenario yang membutuhkan **unpredictability**
+
+Namun, karena urutannya acak, UUID v4 **kurang ideal sebagai primary key** pada tabel besar, karena bisa menyebabkan fragmentasi index B-tree dan penurunan performa insert.
+
+#### UUID v7: Sortable dan Time-Ordered
+
+UUID v7 adalah versi UUID yang dirancang agar tetap unik secara global, tetapi memiliki urutan berdasarkan waktu. Ini menjadikannya jauh lebih ramah terhadap index.
+
+Ketersediaan UUID v7 tergantung versi PostgreSQL:
+
+```sql
+-- PostgreSQL 17+ (built-in, November 2024+)
+SELECT gen_random_uuid_v7();
+```
+
+Untuk PostgreSQL versi lebih lama, UUID v7 biasanya disediakan melalui extension komunitas.
+
+```sql
 CREATE EXTENSION IF NOT EXISTS pg_uuidv7;
 
--- Generate UUID v7:
 SELECT uuid_generate_v7();
--- Output: 018e1e5e-7c8a-7xxx-yyyy-zzzzzzzzzzzz
-
--- ⚠️ NOTE: uuid-ossp extension does NOT support v7!
--- uuid-ossp only supports: v1, v3, v4, v5
 ```
 
-**❌ COMMON MISTAKE:**
+Perlu dicatat bahwa extension `uuid-ossp` **tidak mendukung UUID v7**. Extension tersebut hanya menyediakan UUID v1, v3, v4, dan v5.
 
-```sql
--- WRONG! uuid-ossp tidak punya v7
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-SELECT uuid_generate_v7();  -- ERROR: function does not exist ❌
+Kesalahan umum yang sering terjadi adalah mengira `uuid-ossp` sudah mendukung v7, padahal tidak.
 
--- CORRECT approaches:
--- 1. Use PostgreSQL 17+ with gen_random_uuid_v7()
--- 2. Install pg_uuidv7 extension
--- 3. Implement custom v7 generator using PL/pgSQL
-```
+#### Struktur dan Keunggulan UUID v7
 
-**UUID v7 Format & Benefits:**
+UUID v7 tetap berukuran 128 bit, tetapi strukturnya berbeda dengan v4.
 
-```
-UUID v7 Structure: 128
-[48-bit timestamp][4-bit version][12-bit random][2-bit variant][62-bit random]
+- **48 bit pertama** berisi Unix timestamp dalam milidetik
+- Diikuti oleh bit versi (`0111`)
+- Sisanya adalah bit acak untuk menjamin keunikan
 
-Example:
-018e1e5e-7c8a-7xxx-yyyy-zzzzzzzzzzzz
-└──┬──┘ └─┬┘ └─┬┘ └─┬┘ └────┬─────┘
-   │       │    │    │       │
-   │       │    │    │       └─ 62 bits random
-   │       │    │    └───────── 2 bits variant (10)
-   │       │    └────────────── 12 bits random
-   │       └─────────────────── 4 bits version (0111 = 7)
-   └─────────────────────────── 48 bits Unix timestamp (milliseconds)
+Karena timestamp berada di bagian depan, UUID v7 bersifat:
 
-Keuntungan:
-1. Lexicographically sortable (timestamp di depan) ✅
-2. Time-ordered (natural chronological sorting) ✅
-3. Dapat extract timestamp untuk debugging ✅
-4. ✅ GOOD sebagai primary key (sequential insertion)
-5. Maintains UUID uniqueness benefits ✅
+- **Lexicographically sortable**
+- Secara alami terurut berdasarkan waktu
+- Mudah digunakan untuk debugging karena timestamp bisa diekstrak
+- Sangat cocok sebagai **primary key**
+- Tetap mempertahankan semua keuntungan UUID dari sisi keunikan global
 
-Timestamp capacity:
-- 48 bits = 2^48 milliseconds
-- From Unix epoch (1970-01-01): ~8,925 years
-- Valid until approximately year 10,895 ✅
-```
+Dengan 48 bit timestamp, UUID v7 dapat merepresentasikan waktu hingga sekitar **8.900 tahun ke depan**, jauh melampaui kebutuhan sistem modern.
 
-**UUID v7 vs v4 Comparison:**
+#### Perbandingan UUID v4 vs UUID v7
 
-```
-UUID v4 (random):
-Generated order:
-- 9b8c7e6d-5f4a-4b3c-9d8e-7f6a5b4c3d2e (random position)
-- 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d (random position)
-- c3d2e1f0-a9b8-c7d6-e5f4-a3b2c1d0e9f8 (random position)
-❌ Random order → B-tree index fragmentation
-❌ Requires page splits and rebalancing
-❌ Poor cache locality
+Perbedaan paling penting antara v4 dan v7 terlihat pada urutan data.
 
-UUID v7 (time-ordered):
-Generated order (increasing timestamp):
-- 018e1e5e-0000-7xxx-xxxx-xxxxxxxxxxxx (oldest)
-- 018e1e5e-1000-7yyy-yyyy-yyyyyyyyyyyy
-- 018e1e5e-2000-7zzz-zzzz-zzzzzzzzzzzz
-- 018e1e5f-0000-7aaa-aaaa-aaaaaaaaaaaa (newest)
-✅ Sequential order → efficient B-tree index
-✅ Append-only insertion pattern
-✅ Good cache locality
-✅ Better range query performance
-```
+Pada UUID v4:
+
+- Urutan data benar-benar acak
+- Insert bisa terjadi di tengah-tengah index
+- B-tree sering melakukan page split dan rebalancing
+- Cache locality kurang optimal
+
+Pada UUID v7:
+
+- Data masuk secara berurutan mengikuti waktu
+- Pola insert cenderung append-only
+- Index B-tree lebih stabil dan efisien
+- Performa query range dan insert lebih baik
+
+Kesimpulannya, UUID v4 cocok untuk kebutuhan acak dan keamanan berbasis ketidak-tertebakan, sedangkan UUID v7 adalah pilihan yang jauh lebih tepat untuk primary key pada tabel berskala besar yang membutuhkan performa tinggi dan urutan waktu yang jelas.
 
 ### f. UUID Versions: Complete Overview
 
-Ada 8 versi UUID yang officially defined (RFC 9562).
+UUID memiliki beberapa versi yang masing-masing dirancang untuk kebutuhan yang berbeda. Secara resmi, ada **8 versi UUID** yang didefinisikan dalam **RFC 9562**. Memahami perbedaan tiap versi sangat penting agar kita tidak salah memilih UUID untuk suatu kasus penggunaan.
 
-| Version | Type                 | Description                     | Availability                  | Use Case                                 |
-| ------- | -------------------- | ------------------------------- | ----------------------------- | ---------------------------------------- |
-| **v1**  | Time-based + MAC     | Timestamp + machine MAC address | uuid-ossp extension           | Legacy systems, audit trails             |
-|         |                      |                                 |                               | ⚠️ Privacy concern (exposes MAC)         |
-| **v2**  | DCE Security         | Reserved for DCE security       | Rarely implemented            | Specialized security (almost never used) |
-| **v3**  | Name-based (MD5)     | MD5 hash of namespace + name    | uuid-ossp extension           | Deterministic UUIDs (legacy)             |
-|         |                      |                                 |                               | ⚠️ MD5 considered weak                   |
-| **v4**  | Random               | Pseudorandom (122 bits)         | ✅ gen_random_uuid() built-in | General purpose, secondary IDs           |
-|         |                      |                                 |                               | ❌ NOT for primary keys                  |
-| **v5**  | Name-based (SHA-1)   | SHA-1 hash of namespace + name  | uuid-ossp extension           | Deterministic UUIDs (better than v3)     |
-|         |                      |                                 |                               | ✅ Idempotent operations                 |
-| **v6**  | Reordered time       | Like v1 but sortable            | Extension or custom           | Improvement over v1 (sortable)           |
-| **v7**  | Unix timestamp + rnd | Time-ordered + random           | ✅ PG 17+ or pg_uuidv7        | ✅ **Best for primary keys**             |
-|         |                      |                                 |                               | ✅ Modern distributed systems            |
-| **v8**  | Custom               | User-defined format             | Custom implementation         | Specialized needs (application-specific) |
+Di bawah ini adalah gambaran menyeluruh tiap versi UUID, mulai dari yang paling lama hingga yang paling modern.
 
-**Recommendations by Use Case:**
+#### UUID v1: Time-based + MAC Address
 
-```
-Primary Key:
-├─ Single database
-│   └─ BIGINT SERIAL ✅✅ (most efficient)
-└─ Distributed systems
-    └─ UUID v7 ✅ (sortable + unique)
+UUID v1 dibangun dari kombinasi **timestamp** dan **MAC address** mesin pembuat UUID.
 
-Secondary Identifier:
-├─ Random, unpredictable
-│   └─ UUID v4 ✅ (built-in, easy)
-└─ Deterministic (same input = same output)
-    └─ UUID v5 ✅ (SHA-1 based)
+- Timestamp memberikan urutan waktu
+- MAC address memastikan keunikan antar mesin
 
-Public-facing ID:
-├─ High security concern
-│   └─ UUID v4 ✅ (fully random)
-└─ Need chronological order
-    └─ UUID v7 ⚠️ (but implement proper auth!)
+UUID ini tersedia di PostgreSQL melalui extension `uuid-ossp`.
 
-Legacy integration:
-└─ UUID v1 (if required by external system)
-    ⚠️ Privacy: exposes MAC address
-```
+Use case yang umum:
+
+- Sistem legacy
+- Audit trail yang membutuhkan informasi waktu pembuatan
+
+Namun, ada kelemahan besar:
+
+- UUID v1 mengekspos **MAC address**, yang bisa menjadi masalah privasi dan keamanan
+- Karena alasan ini, UUID v1 jarang direkomendasikan untuk sistem modern
+
+#### UUID v2: DCE Security
+
+UUID v2 merupakan varian khusus dari v1 yang dirancang untuk **Distributed Computing Environment (DCE)**.
+
+Karakteristiknya:
+
+- Digunakan untuk kebutuhan keamanan tertentu
+- Hampir tidak pernah diimplementasikan secara luas
+- Jarang tersedia di database atau library modern
+
+Dalam praktik, UUID v2 hampir tidak pernah digunakan.
+
+#### UUID v3: Name-based (MD5)
+
+UUID v3 dihasilkan dengan cara melakukan hash **MD5** terhadap kombinasi _namespace_ dan _name_.
+
+Sifat utama UUID v3:
+
+- **Deterministik**: input yang sama akan selalu menghasilkan UUID yang sama
+- Cocok untuk skenario idempotent pada sistem lama
+
+Kelemahannya:
+
+- MD5 sudah dianggap lemah secara kriptografi
+- Tidak disarankan untuk sistem baru
+
+UUID v3 tersedia di PostgreSQL melalui extension `uuid-ossp`.
+
+#### UUID v4: Random
+
+UUID v4 adalah UUID yang dihasilkan secara acak.
+
+Karakteristiknya:
+
+- Menggunakan **122 bit pseudorandom**
+- Tidak mengandung informasi waktu atau identitas mesin
+- Sulit ditebak dan sangat kecil peluang collision
+
+UUID v4 tersedia secara built-in di PostgreSQL melalui `gen_random_uuid()`.
+
+Use case yang cocok:
+
+- Identifier umum
+- Correlation ID
+- Tracking ID
+- Identifier sekunder
+
+Namun, karena urutannya acak, UUID v4 **kurang ideal sebagai primary key** pada tabel besar.
+
+#### UUID v5: Name-based (SHA-1)
+
+UUID v5 mirip dengan v3, tetapi menggunakan algoritma hash **SHA-1**.
+
+Keunggulan dibanding v3:
+
+- Lebih aman daripada MD5
+- Tetap deterministik
+
+UUID v5 cocok untuk:
+
+- Operasi idempotent
+- Sistem yang membutuhkan ID konsisten dari input yang sama
+
+UUID v5 juga tersedia melalui extension `uuid-ossp`.
+
+#### UUID v6: Reordered Time
+
+UUID v6 adalah versi yang mencoba memperbaiki kelemahan UUID v1.
+
+Perbedaannya:
+
+- Timestamp diatur ulang agar UUID menjadi **sortable**
+- Tetap mempertahankan konsep time-based UUID
+
+UUID v6 belum tersedia secara luas dan biasanya memerlukan extension atau implementasi khusus. Dalam banyak kasus, UUID v7 menjadi pilihan yang lebih modern.
+
+#### UUID v7: Unix Timestamp + Random
+
+UUID v7 adalah versi UUID modern yang dirancang khusus untuk sistem terdistribusi saat ini.
+
+Karakteristik utama:
+
+- Menggunakan **Unix timestamp (milidetik)** di bagian awal
+- Diikuti oleh bit acak untuk menjaga keunikan
+- Secara alami **terurut berdasarkan waktu**
+
+UUID v7 tersedia:
+
+- Secara built-in di PostgreSQL 17+
+- Atau melalui extension seperti `pg_uuidv7`
+
+UUID v7 sangat direkomendasikan untuk:
+
+- Primary key di sistem terdistribusi
+- Database berskala besar
+- Sistem modern yang membutuhkan performa tinggi
+
+#### UUID v8: Custom
+
+UUID v8 adalah versi paling fleksibel.
+
+Karakteristiknya:
+
+- Format UUID ditentukan sepenuhnya oleh aplikasi
+- Tidak ada struktur baku selain mengikuti ukuran 128 bit
+
+UUID v8 biasanya digunakan untuk kebutuhan yang sangat spesifik dan jarang dibutuhkan oleh aplikasi umum.
+
+#### Rekomendasi Berdasarkan Use Case
+
+Untuk **primary key**:
+
+- Single database dengan satu node: **BIGINT SERIAL** adalah opsi paling efisien
+- Sistem terdistribusi: **UUID v7** adalah pilihan terbaik karena sortable dan tetap unik secara global
+
+Untuk **secondary identifier**:
+
+- Butuh nilai acak dan tidak terprediksi: **UUID v4**
+- Butuh deterministik (input sama, output sama): **UUID v5**
+
+Untuk **public-facing ID**:
+
+- Fokus keamanan dan sulit ditebak: **UUID v4**
+- Perlu urutan waktu: **UUID v7**, tetapi tetap wajib menerapkan autentikasi dan otorisasi
+
+Untuk **integrasi legacy**:
+
+- Gunakan UUID v1 hanya jika benar-benar diwajibkan oleh sistem eksternal
+- Selalu pertimbangkan risiko privasi karena MAC address dapat terekspos
 
 ### g. UUID Components Breakdown
 
-Setiap UUID version memiliki internal structure yang berbeda.
+Setiap versi UUID memiliki **struktur internal** yang berbeda, meskipun semuanya terlihat mirip saat ditampilkan sebagai string. Memahami bagaimana bit-bit di dalam UUID disusun membantu kita mengerti kenapa karakteristik tiap versi berbeda, terutama antara UUID v4 yang acak dan UUID v7 yang berbasis waktu.
 
-#### UUID v4 (Random) Detailed Structure:
+#### UUID v4 (Random) Detailed Structure
+
+UUID v4 sepenuhnya berfokus pada keacakan. Meskipun ditampilkan dalam format heksadesimal dengan tanda `-`, di balik layar UUID v4 adalah **128 bit data biner** dengan pembagian bit yang sudah ditentukan oleh standar.
+
+Contoh UUID v4:
 
 ```
 550e8400-e29b-41d4-a716-446655440000
-│       │       │    │    │
-├───────┴───────┴────┴────┴──────────── 128 bits total
-│
-└─ Bits allocation:
-
-Bit positions:   0                                 127
-                 │                                  │
-Hex positions:   550e8400-e29b-41d4-a716-446655440000
-                 ^^^^^^^^ ^^^^ ^^^^ ^^^^ ^^^^^^^^^^^^
-
-Breakdown:
-┌─────────────────────────────────────────────────────────────┐
-│ Bits 0-31:    Random (32 bits)     → 550e8400               │
-│ Bits 32-47:   Random (16 bits)     → e29b                   │
-│ Bits 48-51:   Version = 4 (fixed)  → 4 (in 41d4)            │
-│ Bits 52-63:   Random (12 bits)     → 1d4                    │
-│ Bits 64-65:   Variant = 10 (fixed) → (in a716)              │
-│ Bits 66-127:  Random (62 bits)     → 716-446655440000       │
-└─────────────────────────────────────────────────────────────┘
-
-Total randomness: 32 + 16 + 12 + 62 = 122 bits ✅
-
-Fixed bits:
-- Version field (bits 48-51): 0100 (binary) = 4
-- Variant field (bits 64-65): 10 (binary) = RFC 4122 compliant
-
-Probability space: 2^122 ≈ 5.3 × 10^36 unique values
 ```
 
-#### UUID v7 (Timestamp-based) Detailed Structure:
+Jika kita lihat struktur bit-nya, UUID ini terbagi sebagai berikut:
+
+- **Bits 0–31 (32 bit)**: bagian acak pertama
+  Contoh: `550e8400`
+- **Bits 32–47 (16 bit)**: bagian acak berikutnya
+  Contoh: `e29b`
+- **Bits 48–51 (4 bit)**: penanda versi
+  Nilai `0100` yang berarti **version 4**
+- **Bits 52–63 (12 bit)**: bagian acak lanjutan
+  Contoh: `1d4`
+- **Bits 64–65 (2 bit)**: penanda varian
+  Nilai `10` yang menandakan UUID mengikuti standar RFC 4122
+- **Bits 66–127 (62 bit)**: bagian acak terakhir
+  Contoh: `716-446655440000`
+
+Jika dijumlahkan, total bit acak pada UUID v4 adalah:
+
+- 32 + 16 + 12 + 62 = **122 bit acak**
+
+Sisa bit bersifat tetap dan hanya berfungsi sebagai metadata versi dan varian. Dengan 122 bit acak, ruang kemungkinan UUID v4 mencapai:
+
+- **2¹²² ≈ 5,3 × 10³⁶ nilai unik**
+
+Inilah alasan mengapa collision pada UUID v4 hampir tidak pernah terjadi dalam praktik.
+
+#### UUID v7 (Timestamp-based) Detailed Structure
+
+UUID v7 memiliki tujuan berbeda. Versi ini dirancang agar UUID tetap unik, tetapi juga **terurut berdasarkan waktu pembuatan**.
+
+Contoh UUID v7:
 
 ```
 018e1e5e-7c8a-7xxx-yyyy-zzzzzzzzzzzz
-│       │       │    │    │
-├───────┴───────┴────┴────┴──────────── 128 bits total
-│
-└─ Bits allocation:
-
-Bit positions:   0                                 127
-                 │                                  │
-                 018e1e5e-7c8a-7xxx-yyyy-zzzzzzzzzzzz
-
-Breakdown:
-┌─────────────────────────────────────────────────────────────┐
-│ Bits 0-47:    Unix timestamp ms (48 bits) → 018e1e5e-7c8a   │
-│ Bits 48-51:   Version = 7 (fixed)         → 7               │
-│ Bits 52-63:   Random (12 bits)            → xxx             │
-│ Bits 64-65:   Variant = 10 (fixed)        → (in yyyy)       │
-│ Bits 66-127:  Random (62 bits)            → yyy-zzzz...     │
-└─────────────────────────────────────────────────────────────┘
-
-Timestamp portion (bits 0-47):
-- Unix epoch milliseconds
-- Range: 0 to 2^48 - 1
-- Covers: 1970-01-01 to ~year 10,895
-- Resolution: 1 millisecond
-
-Random portion: 12 + 62 = 74 bits
-- Handles collisions within same millisecond
-- 2^74 ≈ 18.9 × 10^21 unique values per millisecond
-- Enough for millions of UUIDs per millisecond ✅
-
-Time ordering:
-- UUIDs naturally sort by creation time
-- Lexicographic order = chronological order ✅
 ```
 
-**Extracting Timestamp dari UUID v7:**
+Struktur bit UUID v7 dibagi sebagai berikut:
+
+- **Bits 0–47 (48 bit)**: Unix timestamp dalam milidetik
+  Ini adalah waktu sejak epoch (`1970-01-01`) dengan resolusi 1 milidetik
+- **Bits 48–51 (4 bit)**: penanda versi
+  Nilai `0111` yang berarti **version 7**
+- **Bits 52–63 (12 bit)**: bagian acak
+- **Bits 64–65 (2 bit)**: penanda varian (`10`, RFC 4122)
+- **Bits 66–127 (62 bit)**: bagian acak tambahan
+
+Bagian timestamp sepanjang 48 bit memiliki karakteristik:
+
+- Rentang nilai: `0` hingga `2^48 - 1`
+- Mencakup waktu dari tahun 1970 hingga sekitar **tahun 10.895**
+- Resolusi waktu: **1 milidetik**
+
+Sementara itu, total bit acak pada UUID v7 adalah:
+
+- 12 + 62 = **74 bit acak**
+
+Jumlah ini sangat besar dan memungkinkan sekitar:
+
+- **2⁷⁴ ≈ 18,9 × 10²¹ UUID unik per milidetik**
+
+Artinya, bahkan jika sistem menghasilkan jutaan UUID dalam satu milidetik yang sama, risiko collision tetap dapat diabaikan.
+
+Keunggulan utama UUID v7 adalah urutannya:
+
+- UUID yang dibuat lebih dulu akan selalu lebih kecil secara leksikografis
+- Urutan string UUID mencerminkan urutan waktu pembuatan
+- Sangat ideal untuk indexing dan query berbasis waktu
+
+#### Extracting Timestamp dari UUID v7
+
+Karena timestamp disimpan langsung di dalam UUID v7, kita bisa mengekstraknya kembali untuk kebutuhan debugging, auditing, atau analisis data.
+
+Contoh berikut menunjukkan pendekatan konseptual menggunakan fungsi PostgreSQL:
 
 ```sql
--- ⚠️ Implementation depends on extension/PostgreSQL version
--- Example with custom function (conceptual):
-
 CREATE OR REPLACE FUNCTION uuid_v7_to_timestamp(uuid_val UUID)
 RETURNS TIMESTAMP WITH TIME ZONE AS $$
 DECLARE
@@ -533,207 +754,296 @@ DECLARE
     timestamp_hex TEXT;
     timestamp_ms BIGINT;
 BEGIN
-    -- Convert UUID to hex string (no hyphens)
+    -- Mengubah UUID menjadi string heksadesimal tanpa hyphen
     uuid_hex := REPLACE(uuid_val::TEXT, '-', '');
 
-    -- Extract first 12 hex chars (48 bits)
+    -- Mengambil 12 karakter heksadesimal pertama (48 bit timestamp)
     timestamp_hex := SUBSTRING(uuid_hex FROM 1 FOR 12);
 
-    -- Convert hex to bigint (milliseconds since epoch)
+    -- Konversi hex ke bigint (milidetik sejak epoch)
     timestamp_ms := ('x' || timestamp_hex)::BIT(48)::BIGINT;
 
-    -- Convert to timestamp
+    -- Konversi ke timestamp
     RETURN TO_TIMESTAMP(timestamp_ms / 1000.0);
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
+```
 
--- Usage:
+Dengan fungsi ini, kita bisa langsung mengekstrak waktu pembuatan UUID v7:
+
+```sql
 SELECT uuid_v7_to_timestamp('018e1e5e-7c8a-7xxx-yyyy-zzzzzzzzzzzz');
--- Output: 2024-03-15 10:30:45.123+00
+```
 
--- Practical use: Debugging, auditing, time-based queries
-SELECT id, uuid_v7_to_timestamp(id) as created_at
+Hasilnya berupa timestamp yang presisi hingga milidetik.
+
+Fungsi ini juga berguna untuk query praktis, misalnya saat ingin memfilter data berdasarkan waktu pembuatan tanpa kolom `created_at` terpisah:
+
+```sql
+SELECT id, uuid_v7_to_timestamp(id) AS created_at
 FROM orders
 WHERE uuid_v7_to_timestamp(id) >= NOW() - INTERVAL '1 day';
 ```
 
+Pendekatan ini menunjukkan bahwa UUID v7 bukan sekadar identifier unik, tetapi juga menyimpan informasi waktu yang dapat dimanfaatkan secara langsung dalam analisis dan debugging sistem.
+
 ### h. Conversion: String ↔ UUID
 
-PostgreSQL seamlessly converts between text dan UUID type.
+PostgreSQL memiliki dukungan yang sangat baik untuk konversi antara **string (TEXT)** dan **UUID**. Proses ini berjalan secara otomatis dan aman, selama format inputnya valid. Yang penting untuk dipahami adalah bahwa konversi ini hanya memengaruhi **cara input dan tampilan**, bukan cara data disimpan secara internal.
+
+#### Konversi String ke UUID
+
+Ketika kita memberikan UUID dalam bentuk string, PostgreSQL akan melakukan **implicit cast** ke tipe `UUID`.
 
 ```sql
--- String → UUID (implicit cast)
 SELECT '550e8400-e29b-41d4-a716-446655440000'::UUID;
--- PostgreSQL converts string to binary 16-byte representation ✅
-
--- UUID → String (automatic for display)
-SELECT uuid_value FROM uuid_example;
--- Internally: 16-byte binary
--- Display: formatted as '550e8400-e29b-41d4-a716-446655440000' ✅
-
--- Explicit cast to TEXT
-SELECT uuid_value::TEXT FROM uuid_example;
-SELECT CAST(uuid_value AS TEXT) FROM uuid_example;
--- Both equivalent, outputs TEXT type
-
--- Type checking
-SELECT
-    pg_typeof(uuid_value) as internal_type,
-    pg_typeof(uuid_value::TEXT) as text_type,
-    pg_column_size(uuid_value) as uuid_size,
-    pg_column_size(uuid_value::TEXT) as text_size
-FROM uuid_example;
--- internal_type: uuid
--- text_type: text
--- uuid_size: 16 bytes
--- text_size: ~40 bytes
-
--- Invalid format handling
-SELECT 'not-a-uuid'::UUID;
--- ERROR: invalid input syntax for type uuid: "not-a-uuid"
-
-SELECT 'xxx50e8400-e29b-41d4-a716-446655440000'::UUID;
--- ERROR: invalid input syntax (non-hex characters)
-
-SELECT '550e8400-e29b-41d4-a716'::UUID;
--- ERROR: invalid input syntax (too short)
-
--- Valid input formats (all accepted, stored identically):
-SELECT '550e8400-e29b-41d4-a716-446655440000'::UUID;  -- Standard (recommended)
-SELECT '550e8400e29b41d4a716446655440000'::UUID;      -- No hyphens (accepted)
-SELECT '{550e8400-e29b-41d4-a716-446655440000}'::UUID; -- With braces (accepted)
-SELECT 'urn:uuid:550e8400-e29b-41d4-a716-446655440000'::UUID; -- URN format
-
--- All stored as identical 16-byte binary ✅
--- Display always uses standard hyphenated format
-
--- Best practice: Always use standard hyphenated format
--- Why? Maximum compatibility with other systems/languages
 ```
 
-**Case Sensitivity:**
+Pada saat query ini dijalankan:
+
+- PostgreSQL memvalidasi format string
+- Jika valid, string tersebut dikonversi menjadi **representasi biner 16 byte**
+- Tidak ada string atau hyphen yang disimpan di database
+
+Dengan kata lain, string hanyalah bentuk input, bukan bentuk penyimpanan.
+
+#### Konversi UUID ke String (Display)
+
+Ketika kolom bertipe UUID diambil menggunakan `SELECT`, PostgreSQL secara otomatis mengonversinya ke bentuk string standar untuk ditampilkan.
 
 ```sql
--- UUID comparison is case-insensitive (hex values)
+SELECT uuid_value FROM uuid_example;
+```
+
+Yang terjadi di balik layar:
+
+- Data tetap disimpan sebagai **16-byte binary**
+- PostgreSQL hanya mengonversinya ke format teks saat ditampilkan
+- Format tampilan selalu mengikuti standar UUID dengan hyphen
+
+Jika kita ingin melakukan konversi secara eksplisit, kita bisa menggunakan cast ke `TEXT`.
+
+```sql
+SELECT uuid_value::TEXT FROM uuid_example;
+SELECT CAST(uuid_value AS TEXT) FROM uuid_example;
+```
+
+Kedua cara tersebut identik dan menghasilkan tipe `TEXT`.
+
+#### Memastikan Tipe Data dan Ukuran Storage
+
+Untuk melihat dengan jelas perbedaan antara UUID dan TEXT, kita bisa memeriksa tipe data dan ukuran storage-nya.
+
+```sql
+SELECT
+    pg_typeof(uuid_value) AS internal_type,
+    pg_typeof(uuid_value::TEXT) AS text_type,
+    pg_column_size(uuid_value) AS uuid_size,
+    pg_column_size(uuid_value::TEXT) AS text_size
+FROM uuid_example;
+```
+
+Hasilnya menunjukkan bahwa:
+
+- Tipe internal kolom tetap `uuid`
+- Setelah di-cast, tipe berubah menjadi `text`
+- UUID selalu berukuran **16 bytes**
+- Representasi TEXT membutuhkan sekitar **40 bytes**
+
+Ini menegaskan kembali bahwa UUID jauh lebih efisien daripada TEXT.
+
+#### Penanganan Format yang Tidak Valid
+
+PostgreSQL sangat ketat dalam memvalidasi format UUID. Jika formatnya tidak sesuai, query akan langsung gagal.
+
+```sql
+SELECT 'not-a-uuid'::UUID;
+```
+
+Akan menghasilkan error karena string tersebut bukan UUID sama sekali.
+
+```sql
+SELECT 'xxx50e8400-e29b-41d4-a716-446655440000'::UUID;
+```
+
+Gagal karena mengandung karakter non-heksadesimal.
+
+```sql
+SELECT '550e8400-e29b-41d4-a716'::UUID;
+```
+
+Gagal karena panjang string tidak mencukupi.
+
+Pendekatan ini memastikan integritas data dan mencegah UUID tidak valid masuk ke database.
+
+#### Format Input UUID yang Valid
+
+PostgreSQL cukup fleksibel dalam menerima berbagai format input UUID.
+
+Semua contoh berikut **valid** dan akan disimpan secara identik:
+
+```sql
+SELECT '550e8400-e29b-41d4-a716-446655440000'::UUID;
+SELECT '550e8400e29b41d4a716446655440000'::UUID;
+SELECT '{550e8400-e29b-41d4-a716-446655440000}'::UUID;
+SELECT 'urn:uuid:550e8400-e29b-41d4-a716-446655440000'::UUID;
+```
+
+Meskipun format input berbeda:
+
+- Semua dikonversi ke **16-byte binary yang sama**
+- Tampilan output selalu menggunakan format standar dengan hyphen
+
+Best practice yang direkomendasikan adalah **selalu menggunakan format standar dengan hyphen**, karena paling kompatibel dengan bahasa dan sistem lain.
+
+#### Case Sensitivity pada UUID
+
+UUID bersifat **case-insensitive** karena nilai heksadesimal tidak membedakan huruf besar dan kecil.
+
+```sql
 SELECT
     '550e8400-e29b-41d4-a716-446655440000'::UUID =
     '550E8400-E29B-41D4-A716-446655440000'::UUID;
--- Output: true ✅
-
--- Both convert to same binary representation
 ```
+
+Hasilnya adalah `true`, karena kedua nilai tersebut dikonversi ke representasi biner yang sama.
+
+Hal ini membuat UUID aman digunakan lintas sistem tanpa perlu khawatir perbedaan kapitalisasi huruf.
 
 ### i. Performance Implications (Preview)
 
-Video menyebutkan primary key discussion akan datang, tapi memberikan preview.
+Bagian ini memberikan gambaran awal tentang **dampak performa pemilihan primary key**, khususnya ketika menggunakan UUID. Walaupun pembahasan primary key akan dijelaskan lebih dalam di bagian lain, preview ini sudah cukup untuk memahami _kenapa pilihan UUID tertentu bisa sangat berpengaruh terhadap performa database_.
 
-**UUID v4 sebagai Primary Key: ❌ Problematic**
+#### UUID v4 sebagai Primary Key: Mengapa Bermasalah
+
+UUID v4 bersifat **acak sepenuhnya**. Secara fungsional, UUID v4 memang unik dan aman, tetapi sifat acaknya justru menjadi masalah besar ketika digunakan sebagai **primary key** di database relasional seperti PostgreSQL.
 
 ```sql
 CREATE TABLE bad_example (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY
 );
-
--- Insert 1 million rows
-INSERT INTO bad_example
-SELECT gen_random_uuid() FROM generate_series(1, 1000000);
-
--- Problem: Random insertion order
--- Example sequence:
--- Insert: 9b8c7e6d-5f4a-... → goes to middle of B-tree
--- Insert: 1a2b3c4d-5e6f-... → goes to beginning
--- Insert: c3d2e1f0-a9b8-... → goes to end
--- Insert: 5d4c3b2a-1e0f-... → goes to middle again
-
--- B-tree Index Impact:
--- 1. Page splits (frequent) ❌
--- 2. Index fragmentation ❌
--- 3. Poor cache locality ❌
--- 4. Slower INSERT performance ❌
--- 5. Larger index size (fragmentation overhead) ❌
 ```
 
-**UUID v7 sebagai Primary Key: ✅ Better**
+Ketika kita melakukan insert dalam jumlah besar:
+
+```sql
+INSERT INTO bad_example
+SELECT gen_random_uuid() FROM generate_series(1, 1000000);
+```
+
+Setiap nilai UUID v4 yang dihasilkan akan memiliki urutan yang **tidak dapat diprediksi**. Akibatnya, PostgreSQL tidak bisa sekadar menambahkan data di akhir index, melainkan harus mencari posisi yang tepat di tengah struktur B-tree.
+
+Contoh alur insert-nya kira-kira seperti ini:
+
+- UUID pertama masuk ke tengah index
+- UUID berikutnya masuk ke awal
+- UUID berikutnya lagi ke akhir
+- Lalu kembali ke tengah
+
+Pola ini menyebabkan beberapa dampak serius pada B-tree index:
+
+- **Page split sering terjadi**, karena halaman index harus terus dibagi
+- **Fragmentasi index meningkat**
+- **Cache locality buruk**, karena data tersebar acak
+- **INSERT menjadi lebih lambat**
+- **Ukuran index membengkak**, karena overhead fragmentasi
+
+Singkatnya, UUID v4 memang valid secara teknis, tetapi **tidak ramah performa** jika dijadikan primary key.
+
+#### UUID v7 sebagai Primary Key: Pendekatan yang Lebih Sehat
+
+UUID v7 dirancang dengan pendekatan berbeda. UUID ini mengandung **timestamp Unix di bagian awal**, sehingga nilainya **berurutan secara waktu**.
 
 ```sql
 CREATE TABLE good_example (
-    id UUID DEFAULT uuid_generate_v7() PRIMARY KEY  -- Assuming extension available
+    id UUID DEFAULT uuid_generate_v7() PRIMARY KEY
 );
+```
 
--- Insert 1 million rows
+Ketika kita melakukan insert:
+
+```sql
 INSERT INTO good_example
 SELECT uuid_generate_v7() FROM generate_series(1, 1000000);
-
--- Insertion pattern: Sequential (by timestamp)
--- Insert: 018e1e5e-0000-... → appends to end of B-tree
--- Insert: 018e1e5e-0001-... → appends to end
--- Insert: 018e1e5e-0002-... → appends to end
--- Insert: 018e1e5e-0003-... → appends to end
-
--- B-tree Index Impact:
--- 1. Minimal page splits (mostly append) ✅
--- 2. Low fragmentation ✅
--- 3. Good cache locality ✅
--- 4. Fast INSERT performance ✅
--- 5. Compact index size ✅
 ```
 
-**Preview Comparison:**
+Urutan UUID yang dihasilkan akan mengikuti waktu pembuatan:
 
-```
-B-tree Index Structure (simplified visualization):
+- Nilai baru hampir selalu **lebih besar dari nilai sebelumnya**
+- Insert terjadi dengan pola **append ke akhir B-tree**
 
-UUID v4 (random):
-┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
-│ 1a2b... │ │ 5d4c... │ │ 9b8c... │ │ c3d2... │
-└────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘
-     │           │           │           │
-  [Page 1]   [Page 2]   [Page 3]   [Page 4]
-     ↓           ↓           ↓           ↓
-Fragmented! Pages constantly splitting and rebalancing ❌
-High random I/O, poor cache hit rate
+Dampaknya terhadap index sangat signifikan:
 
+- Page split sangat jarang terjadi
+- Fragmentasi index rendah
+- Cache locality baik karena data berurutan
+- INSERT jauh lebih cepat
+- Ukuran index lebih efisien dan stabil
 
-UUID v7 (sequential):
-┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
-│ 018e5e..│ │ 018e5f..│ │ 018e60..│ │ 018e61..│
-└────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘
-     │           │           │           │
-  [Page 1]   [Page 2]   [Page 3]   [Page 4]
-     ↓           ↓           ↓           ↓
-Sequential! Pages fill left-to-right ✅
-Mostly append operations, good cache hit rate
+UUID v7 memberikan keseimbangan antara **keunikan global** dan **performansi yang mendekati sequential ID**.
 
+#### Gambaran Struktur B-tree
 
-BIGINT SERIAL (best):
-┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
-│  1-1000 │ │1001-2000│ │2001-3000│ │3001-4000│
-└────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘
-     │           │           │           │
-  [Page 1]   [Page 2]   [Page 3]   [Page 4]
-     ↓           ↓           ↓           ↓
-Perfect sequential! Smallest keys (8 bytes vs 16) ✅✅
-Optimal for single-database systems
-```
+Untuk mempermudah pemahaman, bayangkan struktur B-tree sebagai kumpulan halaman (pages).
 
-**Performance Metrics (Typical):**
+Pada UUID v4:
 
-```
-Metric                    BIGINT    UUID v7    UUID v4
-─────────────────────────────────────────────────────────
-Key size                  8 bytes   16 bytes   16 bytes
-Insert speed (relative)   1.0x      0.9x       0.6x
-Index size (relative)     1.0x      1.5x       2.0x
-Page splits (per 1M)      Low       Low        High
-Cache hit rate            High      High       Medium
-Range query speed         Fast      Fast       Medium
-─────────────────────────────────────────────────────────
+- Setiap insert bisa masuk ke halaman mana saja
+- Halaman sering terbelah dan di-rebalance
+- Terjadi banyak random I/O
+- Cache sering miss
 
-Conclusion:
-- BIGINT: Best for single database ✅✅
-- UUID v7: Best for distributed, nearly as good ✅
-- UUID v4: Avoid for primary keys ❌
-```
+Hasilnya adalah index yang terfragmentasi dan mahal secara performa.
+
+Pada UUID v7:
+
+- Halaman terisi dari kiri ke kanan
+- Sebagian besar operasi adalah append
+- Cache hit rate tinggi
+- Struktur index tetap rapi dan stabil
+
+Sedangkan pada **BIGINT SERIAL**:
+
+- Urutan benar-benar sempurna
+- Ukuran key lebih kecil (8 byte vs 16 byte UUID)
+- B-tree bekerja dalam kondisi paling optimal
+
+Inilah alasan mengapa BIGINT masih menjadi pilihan terbaik jika tidak ada kebutuhan distributed.
+
+#### Perbandingan Performa Secara Umum
+
+Jika dibandingkan secara praktis, pola berikut biasanya terlihat:
+
+- **BIGINT**
+
+  - Paling kecil ukurannya
+  - Insert paling cepat
+  - Index paling efisien
+  - Ideal untuk satu database terpusat
+
+- **UUID v7**
+
+  - Sedikit lebih besar dari BIGINT
+  - Insert hampir sama cepatnya
+  - Sangat cocok untuk sistem terdistribusi
+  - Kompromi terbaik antara skalabilitas dan performa
+
+- **UUID v4**
+
+  - Insert paling lambat
+  - Index paling besar
+  - Fragmentasi tinggi
+  - Sebaiknya dihindari sebagai primary key
+
+#### Kesimpulan Awal
+
+Dari preview ini, garis besarnya jelas:
+
+- **BIGINT** adalah pilihan terbaik untuk sistem single-database
+- **UUID v7** adalah solusi modern yang aman dan efisien untuk sistem terdistribusi
+- **UUID v4** sebaiknya **tidak digunakan sebagai primary key**, meskipun sering terlihat di banyak contoh sederhana
+
+Pemilihan primary key bukan hanya soal keunikan, tetapi juga tentang **bagaimana database bekerja di level index dan storage**.
 
 ## 3. Hubungan Antar Konsep
 

@@ -8,16 +8,26 @@ Video ini membahas tentang check constraints di PostgreSQL, sebuah mekanisme unt
 
 ### a. Masalah yang Diselesaikan oleh Check Constraints
 
-Check constraints mengatasi keterbatasan tipe data bawaan PostgreSQL:
+Check constraint hadir untuk menutup celah yang tidak bisa ditangani sepenuhnya oleh tipe data bawaan PostgreSQL. Meskipun PostgreSQL punya sistem tipe data yang kuat, ada beberapa aturan bisnis sederhana yang tidak bisa diekspresikan langsung hanya dengan memilih tipe data. Di sinilah check constraint berperan.
 
-**Problem 1: Integer Tidak Punya Unsigned**
+#### Keterbatasan Tipe Data Bawaan PostgreSQL
+
+Beberapa database lain menyediakan variasi tipe data yang lebih spesifik untuk kasus tertentu. PostgreSQL memilih pendekatan yang lebih konsisten, tetapi konsekuensinya ada beberapa kebutuhan umum yang harus ditangani secara eksplisit oleh developer.
+
+#### Problem 1: Integer Tidak Memiliki Versi Unsigned
+
+Di beberapa database seperti MySQL, kita bisa menggunakan integer unsigned untuk memastikan nilai selalu non-negatif dan sekaligus memanfaatkan seluruh rentang bilangan positif.
 
 ```sql
 -- Di database lain (MySQL, dll):
 CREATE TABLE products (
     quantity UNSIGNED INTEGER  -- Range: 0 sampai 4.2 miliar
 );
+```
 
+Di PostgreSQL, tipe `INTEGER` selalu bertanda (signed). Artinya, setengah dari rentang nilai disediakan untuk bilangan negatif.
+
+```sql
 -- Di PostgreSQL, INTEGER selalu signed:
 CREATE TABLE products (
     quantity INTEGER  -- Range: -2.1 miliar sampai +2.1 miliar
@@ -25,73 +35,127 @@ CREATE TABLE products (
 -- Kita "kehilangan" setengah range untuk nilai negatif yang tidak terpakai!
 ```
 
-**Problem 2: CHAR(n) Tidak Enforce Panjang yang Tepat**
+Untuk kolom seperti `quantity`, nilai negatif sebenarnya tidak masuk akal. Namun tanpa aturan tambahan, PostgreSQL tetap mengizinkan nilai seperti `-10`. Masalah ini bukan soal teknis semata, tetapi soal validasi data sesuai domain bisnis.
+
+#### Problem 2: CHAR(n) Tidak Memaksa Panjang Input Secara Logis
+
+Sekilas, `CHAR(5)` terlihat seperti solusi tepat jika kita ingin menyimpan kode dengan panjang lima karakter.
 
 ```sql
--- CHAR(5) tidak memaksa input harus 5 karakter
 CREATE TABLE codes (
     abbreviation CHAR(5)
 );
-
-INSERT INTO codes VALUES ('A');  -- Berhasil! (jadi 'A    ')
--- Tapi kita mau HARUS 5 karakter, bukan padding!
 ```
 
-**Solusi: Check Constraints**
+Namun perilaku `CHAR(n)` di PostgreSQL adalah melakukan padding dengan spasi, bukan menolak input yang lebih pendek.
 
 ```sql
--- Memaksa nilai >= 0
+INSERT INTO codes VALUES ('A');  -- Berhasil! (disimpan sebagai 'A    ')
+```
+
+Secara teknis ini valid, tetapi secara logika sering kali tidak diinginkan. Jika aturan bisnis menyatakan bahwa kode _harus_ terdiri dari tepat lima karakter, maka padding otomatis justru menyembunyikan kesalahan input.
+
+#### Solusi: Check Constraints
+
+Check constraint memungkinkan kita mendefinisikan aturan validasi langsung di level database. Aturan ini akan selalu dievaluasi setiap kali data dimasukkan atau diubah.
+
+Untuk kasus integer non-negatif, kita bisa memaksa nilainya selalu lebih besar atau sama dengan nol.
+
+```sql
 CREATE TABLE products (
     quantity INTEGER CHECK (quantity >= 0)
 );
+```
 
--- Memaksa panjang string tepat 5 karakter
+Dengan constraint ini, PostgreSQL akan menolak nilai negatif sejak awal, sehingga integritas data tetap terjaga tanpa perlu bergantung pada logika aplikasi.
+
+Untuk kasus panjang string yang harus tepat lima karakter, pendekatan yang lebih tepat adalah menggunakan `TEXT` lalu menambahkan validasi eksplisit.
+
+```sql
 CREATE TABLE codes (
     abbreviation TEXT CHECK (length(abbreviation) = 5)
 );
 ```
 
+Sekarang, setiap input yang panjangnya kurang atau lebih dari lima karakter akan langsung ditolak oleh database. Aturan bisnis menjadi jelas, eksplisit, dan konsisten, serta tidak bergantung pada asumsi perilaku tipe data bawaan.
+
+Dengan cara ini, check constraint berfungsi sebagai lapisan perlindungan tambahan yang memastikan data yang tersimpan benar-benar sesuai dengan makna dan kebutuhan domain aplikasi.
+
 ### b. Syntax Dasar Check Constraint
+
+Check constraint bisa ditulis dengan beberapa gaya penulisan, tetapi secara konsep semuanya melakukan hal yang sama: memvalidasi data sebelum benar-benar disimpan ke dalam tabel. Perbedaan utamanya terletak pada seberapa eksplisit dan seberapa mudah constraint tersebut dipahami saat terjadi error atau saat maintenance.
 
 #### 1. Column Constraint (Inline)
 
-Check constraint yang langsung dideklarasikan setelah tipe data kolom.
+Bentuk paling sederhana dari check constraint adalah menuliskannya langsung setelah tipe data kolom. Pola ini sering disebut sebagai _inline constraint_ karena didefinisikan tepat di tempat kolom dideklarasikan.
 
 ```sql
 -- Syntax paling sederhana
 CREATE TABLE example (
     price NUMERIC CHECK (price > 0)
 );
-
--- Test: Insert valid data
-INSERT INTO example VALUES (10);  -- ✅ Berhasil
-
--- Test: Insert invalid data
-INSERT INTO example VALUES (-1);   -- ❌ ERROR!
--- ERROR: new row violates check constraint "example_price_check"
 ```
 
-#### 2. Named Constraint (dengan nama custom)
+Pada contoh ini, kolom `price` hanya diperbolehkan menyimpan nilai yang lebih besar dari nol. Aturan ini langsung melekat pada kolom tersebut.
 
-Memberikan nama yang descriptive untuk memudahkan debugging.
+Untuk melihat bagaimana constraint ini bekerja, kita bisa mencoba memasukkan data yang valid.
+
+```sql
+INSERT INTO example VALUES (10);  -- ✅ Berhasil
+```
+
+Nilai `10` memenuhi kondisi `price > 0`, sehingga PostgreSQL menerima data tersebut tanpa masalah.
+
+Sebaliknya, ketika kita mencoba memasukkan nilai yang melanggar aturan:
+
+```sql
+INSERT INTO example VALUES (-1);   -- ❌ ERROR!
+```
+
+PostgreSQL akan menolak operasi ini dan menampilkan error seperti berikut:
+
+```text
+ERROR: new row violates check constraint "example_price_check"
+```
+
+Nama constraint `example_price_check` dihasilkan otomatis oleh PostgreSQL. Meskipun masih bisa dipahami, nama ini kurang informatif, terutama jika tabel memiliki banyak constraint.
+
+#### 2. Named Constraint (dengan Nama Custom)
+
+Untuk meningkatkan kejelasan dan kemudahan debugging, kita bisa memberikan nama constraint secara eksplisit. Ini sangat disarankan untuk skema database yang serius atau dikelola oleh tim.
 
 ```sql
 CREATE TABLE example (
     price NUMERIC CONSTRAINT price_must_be_positive CHECK (price > 0)
 );
-
--- Test invalid data
-INSERT INTO example VALUES (-1);
--- ERROR: new row violates check constraint "price_must_be_positive"
--- Nama constraint lebih jelas dan membantu debugging!
 ```
 
-**Keuntungan memberi nama:**
+Di sini, constraint diberi nama `price_must_be_positive`, yang secara langsung menjelaskan aturan yang diterapkan.
 
-- Error message lebih jelas
-- Memudahkan komunikasi dalam tim
-- Lebih informatif di log file
-- Memudahkan maintenance
+Jika kita kembali mencoba memasukkan data yang tidak valid:
+
+```sql
+INSERT INTO example VALUES (-1);
+```
+
+Error yang muncul akan jauh lebih informatif:
+
+```text
+ERROR: new row violates check constraint "price_must_be_positive"
+```
+
+Dari pesan error saja, kita sudah tahu persis aturan mana yang dilanggar, tanpa perlu menebak-nebak atau membuka definisi tabel.
+
+#### Keuntungan Memberi Nama pada Constraint
+
+Memberi nama constraint bukan hanya soal kerapian, tetapi juga soal efisiensi jangka panjang. Beberapa keuntungannya antara lain:
+
+- Pesan error menjadi lebih jelas dan mudah dipahami
+- Memudahkan komunikasi antar anggota tim saat membahas masalah data
+- Log file database menjadi lebih informatif
+- Maintenance dan refactoring skema database menjadi lebih sederhana
+
+Pendekatan ini semakin terasa manfaatnya ketika sebuah tabel memiliki lebih dari satu constraint.
 
 ```sql
 -- Contoh lengkap dengan multiple constraints
@@ -99,35 +163,55 @@ CREATE TABLE example (
     price NUMERIC CONSTRAINT price_must_be_positive CHECK (price > 0),
     abbreviation TEXT CONSTRAINT abbr_length_five CHECK (length(abbreviation) = 5)
 );
+```
 
--- Test
+Pada tabel di atas, ada dua aturan sekaligus: `price` harus bernilai positif, dan `abbreviation` harus memiliki panjang tepat lima karakter.
+
+Ketika diuji dengan data yang benar:
+
+```sql
 INSERT INTO example VALUES (10, 'ABCDE');  -- ✅ OK
+```
+
+Semua constraint terpenuhi, sehingga data berhasil disimpan.
+
+Namun jika salah satu aturan dilanggar, PostgreSQL akan menolak data dan menyebutkan constraint yang relevan.
+
+```sql
 INSERT INTO example VALUES (10, 'ABC');    -- ❌ ERROR: abbr_length_five
 INSERT INTO example VALUES (-5, 'ABCDE');  -- ❌ ERROR: price_must_be_positive
 ```
 
+Dari pesan error tersebut, kita bisa langsung mengetahui kolom mana yang bermasalah dan aturan apa yang dilanggar. Inilah alasan mengapa named constraint sangat direkomendasikan dalam desain database yang rapi, jelas, dan mudah dirawat.
+
 ### c. Column Constraint vs Table Constraint
+
+Dalam PostgreSQL, check constraint bisa dideklarasikan di dua level yang berbeda: langsung pada kolom (column constraint) atau pada level tabel (table constraint). Keduanya sama-sama berfungsi untuk memvalidasi data, tetapi memiliki peran dan batasan yang berbeda. Memahami perbedaannya penting agar desain constraint tetap jelas, aman, dan mudah dirawat.
 
 #### Column Constraint
 
-Dideklarasikan langsung setelah definisi kolom, hanya bisa mereferensi satu kolom.
+Column constraint dideklarasikan langsung setelah definisi sebuah kolom. Karena posisinya melekat pada kolom tertentu, jenis constraint ini hanya boleh mereferensikan kolom tersebut.
 
 ```sql
 CREATE TABLE example (
-    price NUMERIC CHECK (price > 0),              -- Column constraint
-    abbreviation TEXT CHECK (length(abbreviation) = 5)  -- Column constraint
+    price NUMERIC CHECK (price > 0),                     -- Column constraint
+    abbreviation TEXT CHECK (length(abbreviation) = 5)   -- Column constraint
 );
 ```
 
-**Karakteristik:**
+Pada contoh di atas, setiap kolom memiliki aturan validasinya masing-masing. `price` harus bernilai positif, dan `abbreviation` harus memiliki panjang tepat lima karakter. Semua aturan ini berdiri sendiri dan tidak saling bergantung.
 
-- ✅ Ringkas untuk constraint sederhana
-- ✅ Mudah dibaca untuk single-column rules
-- ❌ Hanya bisa referensi kolom itu sendiri
+Karakteristik utama dari column constraint antara lain:
+
+- Ringkas dan langsung terlihat di definisi kolom
+- Mudah dibaca untuk aturan sederhana yang hanya melibatkan satu kolom
+- Tidak bisa digunakan untuk membandingkan atau mengaitkan dengan kolom lain
+
+Dengan kata lain, column constraint sangat cocok untuk validasi dasar seperti range angka, panjang string, atau format sederhana yang hanya berkaitan dengan satu kolom.
 
 #### Table Constraint
 
-Dideklarasikan terpisah setelah semua kolom, bisa mereferensi multiple kolom.
+Table constraint dideklarasikan setelah semua kolom selesai didefinisikan. Karena berada di level tabel, constraint ini bisa mereferensikan satu atau lebih kolom sekaligus.
 
 ```sql
 CREATE TABLE example (
@@ -139,8 +223,11 @@ CREATE TABLE example (
 );
 ```
 
-**Kapan HARUS menggunakan Table Constraint:**
-Ketika constraint melibatkan lebih dari satu kolom.
+Secara fungsi, contoh di atas setara dengan column constraint sebelumnya. Perbedaannya hanya pada lokasi penulisan. Namun kekuatan table constraint baru terasa ketika aturan validasi melibatkan lebih dari satu kolom.
+
+#### Kapan Harus Menggunakan Table Constraint
+
+Table constraint wajib digunakan ketika sebuah aturan membutuhkan perbandingan atau hubungan antar kolom.
 
 ```sql
 CREATE TABLE example (
@@ -148,25 +235,35 @@ CREATE TABLE example (
     discount_price NUMERIC,
     abbreviation TEXT,
 
-    -- Column constraints (opsional di sini atau inline)
+    -- Column atau table constraints untuk validasi masing-masing kolom
     CHECK (price > 0),
     CHECK (discount_price > 0),
     CHECK (length(abbreviation) = 5),
 
-    -- Table constraint (HARUS di sini karena melibatkan 2 kolom)
+    -- Table constraint karena melibatkan dua kolom
     CHECK (price > discount_price)
 );
 ```
 
-**Best Practice:**
+Constraint `CHECK (price > discount_price)` tidak mungkin ditulis sebagai column constraint, karena aturannya bergantung pada dua kolom sekaligus. PostgreSQL memang mengizinkan referensi lintas kolom hanya di level tabel.
+
+#### Best Practice dalam Memilih Level Constraint
+
+Kesalahan umum yang sering terjadi adalah mencoba menulis constraint multi-kolom di level kolom.
 
 ```sql
 -- ❌ BURUK: Multi-column constraint di column level
 CREATE TABLE products (
-    price NUMERIC CHECK (price > discount_price),  -- BAD! Belum ada discount_price
+    price NUMERIC CHECK (price > discount_price),  -- SALAH: discount_price belum ada
     discount_price NUMERIC
 );
+```
 
+Selain tidak valid secara sintaks, pendekatan ini juga membingungkan secara desain karena menyembunyikan relasi antar kolom di definisi satu kolom saja.
+
+Pendekatan yang benar dan direkomendasikan adalah memindahkan aturan tersebut ke table constraint.
+
+```sql
 -- ✅ BAIK: Multi-column constraint di table level
 CREATE TABLE products (
     price NUMERIC,
@@ -175,38 +272,15 @@ CREATE TABLE products (
 );
 ```
 
-### d. Contoh Lengkap dengan Multiple Constraints
+Dengan cara ini, aturan bisnis yang melibatkan lebih dari satu kolom menjadi lebih jelas, eksplisit, dan mudah dipahami. Secara umum, gunakan column constraint untuk validasi sederhana per kolom, dan table constraint untuk aturan yang melibatkan relasi antar kolom.
 
-```sql
-CREATE TABLE products (
-    price NUMERIC CONSTRAINT price_positive CHECK (price > 0),
-    discount_price NUMERIC CONSTRAINT discount_positive CHECK (discount_price > 0),
-    abbreviation TEXT,
+### d. Batasan Check Constraints
 
-    -- Multi-column constraint
-    CONSTRAINT price_greater_than_discount CHECK (price > discount_price),
-    CHECK (length(abbreviation) = 5)
-);
+Meskipun check constraint sangat berguna untuk menjaga validitas data, ada batasan penting yang perlu dipahami. Check constraint dirancang untuk melakukan validasi sederhana dan deterministik pada satu baris data saja. Begitu aturan validasi mulai bergantung pada data di luar baris tersebut, check constraint tidak lagi menjadi alat yang tepat.
 
--- Test case 1: Semua valid
-INSERT INTO products VALUES (10, 8, 'ABCDE');  -- ✅ OK
+#### 1. Tidak Bisa Mereferensikan Tabel Lain
 
--- Test case 2: discount_price negatif
-INSERT INTO products VALUES (10, -8, 'ABCDE'); -- ❌ ERROR: discount_positive
-
--- Test case 3: price negatif
-INSERT INTO products VALUES (-10, 8, 'ABCDE'); -- ❌ ERROR: price_positive
-
--- Test case 4: price < discount_price
-INSERT INTO products VALUES (8, 10, 'ABCDE');  -- ❌ ERROR: price_greater_than_discount
-
--- Test case 5: abbreviation tidak 5 karakter
-INSERT INTO products VALUES (10, 8, 'ABC');    -- ❌ ERROR: length check
-```
-
-### e. Batasan Check Constraints
-
-#### 1. Tidak Bisa Referensi Tabel Lain
+Check constraint tidak diperbolehkan menggunakan subquery, termasuk query ke tabel lain. Artinya, kita tidak bisa membuat aturan yang bergantung pada data dari tabel berbeda.
 
 ```sql
 -- ❌ TIDAK BISA: Referensi tabel lain
@@ -215,12 +289,21 @@ CREATE TABLE orders (
     quantity INTEGER,
     CHECK (quantity <= (SELECT stock FROM products WHERE id = product_id))
 );
--- ERROR: cannot use subquery in check constraint
-
--- ✅ ALTERNATIF: Gunakan trigger atau foreign key
 ```
 
-#### 2. Tidak Bisa Referensi Row Lain dalam Tabel yang Sama
+Saat mencoba menjalankan definisi tabel di atas, PostgreSQL akan langsung menolak dengan error:
+
+```text
+ERROR: cannot use subquery in check constraint
+```
+
+Masalahnya bukan pada logika bisnisnya, melainkan pada keterbatasan check constraint itu sendiri. Check constraint harus selalu bisa dievaluasi secara lokal, tanpa bergantung pada kondisi eksternal yang bisa berubah kapan saja.
+
+Jika kebutuhan bisnis memang mengharuskan validasi lintas tabel, pendekatan yang benar adalah menggunakan mekanisme lain seperti trigger atau kombinasi foreign key dan constraint tambahan.
+
+#### 2. Tidak Bisa Mereferensikan Baris Lain dalam Tabel yang Sama
+
+Selain tidak bisa mengakses tabel lain, check constraint juga tidak boleh membandingkan data dengan baris lain dalam tabel yang sama. Subquery ke tabel itu sendiri tetap dianggap subquery dan tidak diizinkan.
 
 ```sql
 -- ❌ TIDAK BISA: Membandingkan dengan row lain
@@ -229,12 +312,21 @@ CREATE TABLE inventory (
     quantity INTEGER,
     CHECK (quantity < (SELECT MAX(quantity) FROM inventory))
 );
--- ERROR: cannot use subquery in check constraint
-
--- Check constraint hanya bisa akses nilai dalam row yang sedang di-insert/update
 ```
 
-#### 3. Hanya Menerima Row Being Inserted/Updated
+Definisi ini juga akan menghasilkan error yang sama:
+
+```text
+ERROR: cannot use subquery in check constraint
+```
+
+Alasannya konsisten: check constraint hanya boleh mengevaluasi nilai dari baris yang sedang di-_insert_ atau di-_update_. Ia tidak memiliki konteks global tentang isi tabel secara keseluruhan.
+
+Aturan seperti “jumlah ini harus lebih kecil dari stok terbesar yang pernah ada” membutuhkan pemahaman lintas baris, sehingga harus ditangani oleh trigger atau logika aplikasi.
+
+#### 3. Hanya Mengevaluasi Baris yang Sedang Diproses
+
+Batasan ini sekaligus menjelaskan apa yang justru bisa dilakukan oleh check constraint. Selama semua nilai yang dibutuhkan berada dalam baris yang sama, constraint akan bekerja dengan baik.
 
 ```sql
 -- ✅ BISA: Akses nilai dalam row yang sama
@@ -242,71 +334,102 @@ CREATE TABLE orders (
     price NUMERIC,
     tax NUMERIC,
     total NUMERIC,
-    CHECK (total = price + tax)  -- OK, semua dalam row yang sama
+    CHECK (total = price + tax)
 );
 ```
 
-### f. Memodifikasi Check Constraints
+Pada contoh ini, `price`, `tax`, dan `total` semuanya berada dalam satu baris yang sama. Ketika data dimasukkan atau diperbarui, PostgreSQL akan mengevaluasi ekspresi `total = price + tax` menggunakan nilai dari baris tersebut saja.
 
-#### Tidak Bisa ALTER, Harus DROP dan RECREATE
+Jika hasilnya benar, data diterima. Jika tidak, operasi akan ditolak. Inilah pola penggunaan check constraint yang ideal: aturan sederhana, deterministik, dan sepenuhnya bergantung pada nilai dalam satu baris data.
+
+### e. Memodifikasi Check Constraints
+
+Salah satu hal penting yang perlu dipahami saat bekerja dengan check constraint adalah bahwa logika constraint tidak bisa diubah secara langsung. PostgreSQL tidak menyediakan mekanisme untuk “mengedit” ekspresi di dalam constraint. Jika aturan validasi perlu diubah, pendekatannya selalu sama: hapus constraint lama, lalu buat constraint baru dengan aturan yang diperbarui.
+
+#### Tidak Bisa Menggunakan ALTER untuk Mengubah Logika Constraint
+
+Sering kali muncul asumsi bahwa constraint bisa diubah seperti kolom, misalnya dengan perintah `ALTER CONSTRAINT`. Namun untuk check constraint, hal ini tidak didukung.
 
 ```sql
 -- ❌ TIDAK BISA: Alter constraint logic
 ALTER TABLE products ALTER CONSTRAINT price_positive CHECK (price > 10);
--- ERROR: syntax error
+```
 
--- ✅ HARUS: Drop dan recreate
--- Cara 1: Dua statement terpisah (ada window tanpa constraint!)
+Perintah di atas akan langsung menghasilkan error sintaks, karena PostgreSQL memang tidak mengizinkan perubahan isi check constraint secara langsung. Constraint diperlakukan sebagai satu kesatuan utuh: jika isinya berubah, constraint tersebut harus diganti.
+
+#### Pendekatan yang Benar: Drop dan Recreate Constraint
+
+Untuk memperbarui aturan, constraint lama harus dihapus terlebih dahulu, lalu constraint baru ditambahkan dengan logika yang baru.
+
+Cara paling sederhana adalah menggunakan dua statement terpisah.
+
+```sql
+-- Cara 1: Dua statement terpisah
 ALTER TABLE products DROP CONSTRAINT price_positive;
 ALTER TABLE products ADD CONSTRAINT price_positive CHECK (price > 10);
+```
 
--- Cara 2: Single statement (lebih aman!)
+Pendekatan ini secara fungsional benar, tetapi memiliki risiko tersembunyi. Di antara dua perintah tersebut, terdapat jeda waktu di mana tabel tidak memiliki constraint sama sekali.
+
+#### Risiko Window Tanpa Constraint
+
+Jika dua statement dijalankan secara terpisah, akan ada momen singkat di mana constraint sudah dihapus tetapi belum ditambahkan kembali.
+
+```sql
+ALTER TABLE products DROP CONSTRAINT price_positive;
+-- ⚠️ Pada titik ini, tabel tidak memiliki constraint
+-- User bisa saja menginsert data invalid
+ALTER TABLE products ADD CONSTRAINT price_positive CHECK (price > 10);
+```
+
+Dalam sistem dengan banyak koneksi atau aplikasi yang berjalan paralel, jeda singkat ini sudah cukup untuk memungkinkan data yang melanggar aturan masuk ke database.
+
+#### Solusi yang Lebih Aman: Single Statement (Atomic)
+
+Untuk menghindari masalah tersebut, PostgreSQL memungkinkan kita menggabungkan operasi drop dan add dalam satu perintah `ALTER TABLE`.
+
+```sql
 ALTER TABLE products
     DROP CONSTRAINT price_positive,
     ADD CONSTRAINT price_positive CHECK (price > 10);
 ```
 
-**Kenapa single statement lebih baik:**
+Dalam bentuk ini, perubahan dilakukan secara atomik. Artinya, PostgreSQL memperlakukan operasi tersebut sebagai satu kesatuan. Tidak pernah ada kondisi di mana constraint benar-benar “hilang” di tengah proses.
+
+Pendekatan single statement ini sangat direkomendasikan, terutama pada database produksi, karena memastikan integritas data tetap terjaga sepanjang proses perubahan aturan.
+
+### f. Business Logic vs Data Integrity
+
+Salah satu diskusi klasik dalam desain sistem adalah menentukan batas antara tanggung jawab database dan tanggung jawab aplikasi. Pertanyaannya sederhana, tetapi jawabannya tidak selalu hitam-putih: aturan mana yang sebaiknya ditegakkan oleh database, dan aturan mana yang lebih tepat diletakkan di application layer?
+
+Kuncinya ada pada pembedaan antara **data integrity** dan **business logic**.
+
+#### Data Integrity (Cocok Ditegakkan di Database)
+
+Data integrity berkaitan dengan konsistensi dan validitas dasar data. Aturan-aturan ini biasanya bersifat struktural, jarang berubah, dan harus selalu benar apa pun aplikasi yang mengakses database.
 
 ```sql
--- Scenario dengan dua statement:
-ALTER TABLE products DROP CONSTRAINT price_positive;
--- ⚠️ Window waktu tanpa constraint!
--- User bisa insert data invalid di sini!
-ALTER TABLE products ADD CONSTRAINT price_positive CHECK (price > 10);
-
--- Single statement: Atomic operation
-ALTER TABLE products
-    DROP CONSTRAINT price_positive,
-    ADD CONSTRAINT price_positive CHECK (price > 10);
--- ✅ Tidak ada window tanpa constraint
-```
-
-### g. Business Logic vs Data Integrity
-
-Video memberikan perspektif tentang perdebatan klasik: Seberapa banyak logic yang sebaiknya ada di database?
-
-**Data Integrity (✅ Cocok untuk Database):**
-
-```sql
--- Constraint yang melindungi konsistensi data
 CREATE TABLE products (
     price NUMERIC CHECK (price > 0),              -- Harga harus positif
-    stock INTEGER CHECK (stock >= 0),             -- Stok tidak boleh negatif
-    sku TEXT CHECK (length(sku) = 8),             -- SKU harus 8 karakter
+    stock INTEGER CHECK (stock >= 0),              -- Stok tidak boleh negatif
+    sku TEXT CHECK (length(sku) = 8),              -- SKU harus 8 karakter
     discount_price NUMERIC,
-    CHECK (price >= discount_price)               -- Harga > harga diskon
+    CHECK (price >= discount_price)                -- Harga >= harga diskon
 );
 ```
 
-**Business Logic (⚠️ Pertimbangkan Aplikasi Layer):**
+Constraint di atas bukan tentang “bagaimana bisnis berjalan”, tetapi tentang memastikan data masuk akal. Harga tidak boleh negatif, stok tidak boleh minus, dan harga diskon tidak boleh melebihi harga normal. Aturan seperti ini hampir pasti berlaku untuk semua aplikasi yang menggunakan tabel tersebut, sekarang maupun di masa depan.
+
+Karena sifatnya fundamental, database adalah tempat yang tepat untuk menegakkannya.
+
+#### Business Logic (Perlu Dipertimbangkan di Application Layer)
+
+Business logic biasanya mencerminkan kebijakan atau strategi bisnis. Aturan jenis ini sering kali lebih kompleks, bisa berubah seiring waktu, dan kadang bergantung pada konteks eksternal.
 
 ```sql
--- Complex calculations atau rules yang sering berubah
 CREATE TABLE orders (
     subtotal NUMERIC,
     discount NUMERIC,
-    -- ⚠️ Terlalu complex untuk constraint?
     CHECK (
         CASE
             WHEN subtotal > 1000 THEN discount <= subtotal * 0.2
@@ -315,46 +438,59 @@ CREATE TABLE orders (
         END
     )
 );
--- Mungkin lebih baik di aplikasi karena rule bisa sering berubah
 ```
 
-**Rekomendasi:**
+Secara teknis, constraint di atas valid dan akan bekerja. Namun, kompleksitasnya cukup tinggi dan sangat mungkin berubah: batas subtotal bisa diubah, persentase diskon bisa disesuaikan, atau logikanya menjadi lebih rumit.
 
-| Kriteria                              | Database (CHECK) | Application |
-| ------------------------------------- | ---------------- | ----------- |
-| Data yang konsisten secara struktural | ✅               |             |
-| Rule yang jarang berubah              | ✅               |             |
-| Multiple aplikasi akses DB            | ✅               |             |
-| Complex business calculations         |                  | ✅          |
-| Rule yang sering berubah              |                  | ✅          |
-| Membutuhkan external data             |                  | ✅          |
+Jika aturan seperti ini ditanam langsung di database, setiap perubahan kebijakan bisnis akan memaksa kita melakukan `ALTER TABLE` dan memodifikasi constraint. Dalam banyak kasus, hal ini lebih fleksibel jika ditangani di application layer.
 
-**Contoh yang JELAS Database:**
+#### Rekomendasi Umum
+
+Sebagai panduan praktis, berikut cara membagi tanggung jawab antara database dan aplikasi:
+
+| Kriteria                           | Database (CHECK) | Application |
+| ---------------------------------- | ---------------- | ----------- |
+| Konsistensi data secara struktural | Cocok            |             |
+| Rule yang jarang berubah           | Cocok            |             |
+| Database diakses banyak aplikasi   | Cocok            |             |
+| Perhitungan bisnis yang kompleks   |                  | Cocok       |
+| Rule yang sering berubah           |                  | Cocok       |
+| Membutuhkan data eksternal         |                  | Cocok       |
+
+Pendekatan ini membantu menjaga database tetap kuat dan konsisten, tanpa menjadikannya terlalu kaku atau sulit dikembangkan.
+
+#### Contoh yang Jelas Masuk Data Integrity
+
+Beberapa aturan sering disalahartikan sebagai business logic, padahal sebenarnya murni soal validitas data.
 
 ```sql
--- Ini bukan "business logic", ini data integrity
 CREATE TABLE users (
     age INTEGER CHECK (age >= 0 AND age <= 150),
     email TEXT CHECK (email LIKE '%@%')
 );
 ```
 
-**Contoh yang MUNGKIN Aplikasi:**
+Aturan usia masuk akal secara biologis, dan format email minimal harus mengandung karakter `@`. Ini bukan kebijakan bisnis, melainkan perlindungan terhadap data yang tidak valid.
+
+#### Contoh yang Lebih Tepat Dipertimbangkan di Aplikasi
+
+Sebaliknya, ada aturan yang terlihat cocok sebagai constraint, tetapi memiliki potensi perubahan tinggi.
 
 ```sql
--- Business rule yang bisa berubah
 CREATE TABLE memberships (
     tier TEXT CHECK (tier IN ('bronze', 'silver', 'gold', 'platinum')),
-    -- Apa tier-nya berubah? Butuh ALTER constraint
     discount_percent NUMERIC CHECK (
         (tier = 'platinum' AND discount_percent <= 20) OR
         (tier = 'gold' AND discount_percent <= 15) OR
         (tier = 'silver' AND discount_percent <= 10) OR
         (tier = 'bronze' AND discount_percent <= 5)
     )
-    -- Rule ini bisa sering berubah, mungkin lebih baik di aplikasi
 );
 ```
+
+Selama daftar tier dan persentase diskon stabil, pendekatan ini masih masuk akal. Namun jika bisnis sering menambah tier baru atau mengubah besaran diskon, constraint ini akan sering dimodifikasi.
+
+Dalam situasi seperti itu, menempatkan aturan di application layer biasanya lebih fleksibel dan lebih mudah disesuaikan dengan kebutuhan bisnis yang terus berkembang.
 
 ## 3. Hubungan Antar Konsep
 

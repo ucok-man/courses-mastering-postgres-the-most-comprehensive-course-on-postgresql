@@ -8,41 +8,97 @@ Materi ini membahas tentang menyimpan data **JSON** di PostgreSQL, topik yang cu
 
 ### a. Kontroversi: Haruskah JSON Disimpan di Database Relational?
 
-**Dua kubu ekstrem:**
+Topik ini sering memicu perdebatan di kalangan developer, terutama saat menggunakan database seperti PostgreSQL. Intinya, ada dua pandangan yang cukup ekstrem tentang penggunaan JSON di database relasional.
 
-```
-Kubu 1 (Puritan):                    Kubu 2 (Liberal):
-"JANGAN PERNAH simpan JSON           "Treat Postgres seperti MongoDB
-di relational database!"             dengan primary key + JSON blob!"
-         |                                      |
-         └──────────────┬──────────────────────┘
-                        |
-                   Pendekatan Tengah ✅
-           "JSON berguna untuk use case tertentu"
-```
+#### Dua kubu ekstrem
 
-**Posisi yang direkomendasikan:**
+Bayangkan ada dua kelompok dengan filosofi yang sangat berbeda:
 
-- JSON **sangat berguna** dan tidak ada yang salah dengan menyimpannya di PostgreSQL
-- PostgreSQL memiliki **banyak fitur** untuk manipulasi JSON (querying, indexing, updating)
-- Yang penting adalah **tahu kapan** menggunakan JSON dan kapan menggunakan kolom terpisah
+- **Kubu 1 (Puritan)**
+  Mereka berpendapat bahwa database relasional harus tetap “murni”. Artinya:
+  - Data harus disimpan dalam bentuk tabel yang terstruktur
+  - Setiap kolom punya tipe data yang jelas
+  - Relasi antar tabel harus eksplisit
+
+  Bagi mereka, menyimpan JSON di database relasional itu seperti “melanggar aturan”. JSON dianggap tidak cocok karena:
+  - Strukturnya fleksibel (tidak ketat seperti skema tabel)
+  - Sulit dijaga konsistensinya jika tidak dikontrol dengan baik
+
+- **Kubu 2 (Liberal)**
+  Di sisi lain, ada yang berpikir lebih fleksibel. Mereka melihat PostgreSQL bukan hanya sebagai database relasional, tapi juga bisa diperlakukan seperti NoSQL (misalnya seperti MongoDB).
+
+  Pendekatannya:
+  - Gunakan primary key biasa
+  - Simpan sebagian besar data dalam bentuk JSON (sering disebut “JSON blob”)
+
+  Keuntungannya:
+  - Lebih fleksibel (tidak perlu ubah skema tiap kali struktur data berubah)
+  - Cocok untuk data yang tidak konsisten atau sering berubah
+
+#### Pendekatan tengah (yang direkomendasikan)
+
+Daripada memilih salah satu ekstrem, pendekatan yang paling sehat adalah berada di tengah:
+
+- JSON **bukan sesuatu yang salah**
+- Tapi juga **bukan solusi untuk semua hal**
+
+Anggap JSON sebagai **alat tambahan**, bukan pengganti total desain relasional.
+
+#### Posisi yang direkomendasikan
+
+Berikut prinsip yang lebih praktis dan realistis:
+
+- JSON itu **sangat berguna**, terutama di PostgreSQL yang memang punya dukungan kuat seperti:
+  - Query JSON (misalnya operator `->`, `->>`)
+  - Indexing JSON (GIN index)
+  - Update sebagian isi JSON tanpa overwrite seluruh data
+
+- Tidak ada masalah menyimpan JSON, selama:
+  - Kamu paham tujuan penggunaannya
+  - Tidak mengorbankan struktur data yang seharusnya jelas
+
+- Kunci utamanya adalah: **tahu kapan menggunakan JSON dan kapan menggunakan kolom biasa**
+
+  Sebagai gambaran sederhana:
+  - Gunakan **kolom terpisah** jika:
+    - Data selalu ada dan strukturnya tetap (misalnya: nama, email, tanggal lahir)
+
+  - Gunakan **JSON** jika:
+    - Data opsional atau fleksibel (misalnya: preferensi user, metadata tambahan, konfigurasi dinamis)
+
+Dengan pola pikir ini, kamu bisa memanfaatkan kekuatan database relasional tanpa kehilangan fleksibilitas yang ditawarkan JSON.
 
 ### b. Pedoman Kapan Menggunakan JSON vs Kolom Terpisah
 
-#### **1. Pertimbangan Access Pattern**
+Bagian ini membantu kamu mengambil keputusan yang lebih tepat: kapan sebaiknya memakai JSON, dan kapan lebih baik tetap menggunakan kolom biasa di database seperti PostgreSQL.
 
-**❌ Jangan gunakan JSON jika:**
+Pendekatannya bukan sekadar preferensi, tapi berdasarkan **bagaimana data digunakan (access pattern)**, **struktur skema**, dan **ukuran data**.
 
-- Kamu **terus-menerus query** field tertentu di dalam JSON
-- Field tersebut adalah **primary lookup key** (misalnya email user)
+#### 1. Pertimbangan Access Pattern
 
-**✅ Gunakan JSON jika:**
+Hal pertama yang perlu dipikirkan adalah: **bagaimana data akan diakses?**
 
-- Seluruh blob di-update sekaligus
-- Jarang perlu query field internal
-- Data bersifat semi-structured atau flexible
+##### ❌ Jangan gunakan JSON jika:
 
-**Contoh kasus:**
+- Kamu **sering melakukan query** ke field tertentu di dalam JSON
+- Field tersebut menjadi **kunci utama pencarian** (misalnya email user)
+
+Kenapa ini penting?
+Karena query ke dalam JSON biasanya:
+
+- Lebih kompleks
+- Bisa lebih lambat dibanding kolom biasa
+- Sulit dioptimalkan jika sering digunakan
+
+##### ✅ Gunakan JSON jika:
+
+- Data biasanya diambil atau di-update **sebagai satu kesatuan (blob)**
+- Jarang perlu mengakses field individual di dalamnya
+- Struktur datanya **fleksibel atau semi-structured**
+
+##### Contoh kasus
+
+Perhatikan dua desain berikut:
 
 ```sql
 -- ❌ KURANG OPTIMAL (email sering di-query)
@@ -50,7 +106,14 @@ CREATE TABLE users_bad (
     id BIGINT PRIMARY KEY,
     data JSONB  -- berisi: {email, name, address, preferences, ...}
 );
+```
 
+Di sini, semua data user dimasukkan ke dalam satu kolom JSON.
+Masalahnya: kalau kamu sering mencari user berdasarkan email, query jadi tidak efisien.
+
+Bandingkan dengan:
+
+```sql
 -- ✅ LEBIH BAIK
 CREATE TABLE users_good (
     id BIGINT PRIMARY KEY,
@@ -60,27 +123,43 @@ CREATE TABLE users_good (
 );
 ```
 
-**Solusi tengah: Generated Columns**
+Desain ini lebih optimal karena:
 
-- Kamu bisa tetap simpan JSON blob lengkap
-- Tapi ekstrak field penting ke top-level column
-- (Akan dibahas detail di materi generated columns)
+- Field penting seperti `email` dan `name` dibuat sebagai kolom biasa
+- JSON hanya digunakan untuk data tambahan yang jarang diakses
 
-#### **2. Pertimbangan Schema Structure**
+##### Solusi tengah: Generated Columns
 
-**Tanda harus pisah ke kolom terpisah:**
+Kalau kamu tetap ingin menyimpan JSON lengkap:
 
-- Schema **rigid** dan **well-defined**
-- Structure sudah dipahami dengan baik
-- Field-field di-update **secara independen**
+- Simpan JSON sebagai sumber utama
+- Tapi **ekstrak field penting ke kolom terpisah**
 
-**Tanda bisa tetap JSON:**
+Ini memberi kamu fleksibilitas JSON + performa query kolom biasa. Konsep ini dikenal sebagai _generated columns_.
 
-- Schema **flexible** atau **evolving**
-- Seluruh document di-update **sekaligus**
-- PostgreSQL punya **JSON patching support** (bisa update sebagian)
+#### 2. Pertimbangan Schema Structure
 
-**Contoh:**
+Selanjutnya, lihat dari sisi **struktur data (schema)**.
+
+##### Tanda harus dipisah ke kolom terpisah:
+
+- Struktur data sudah **jelas dan stabil**
+- Field-field sudah diketahui dari awal
+- Setiap field sering di-update **secara independen**
+
+Dalam kondisi ini, pendekatan relasional klasik lebih cocok.
+
+##### Tanda cocok menggunakan JSON:
+
+- Struktur data **fleksibel atau sering berubah**
+- Tidak semua record punya field yang sama
+- Biasanya di-update **sekaligus sebagai satu dokumen**
+
+Selain itu, PostgreSQL juga mendukung update sebagian JSON (JSON patching), jadi tetap cukup powerful.
+
+##### Contoh
+
+Schema yang rigid:
 
 ```sql
 -- Schema rigid → Pecah ke kolom
@@ -91,7 +170,13 @@ CREATE TABLE products_structured (
     stock INT NOT NULL,
     category TEXT
 );
+```
 
+Semua field jelas dan konsisten → cocok pakai kolom biasa.
+
+Schema yang fleksibel:
+
+```sql
 -- Schema flexible → Simpan sebagai JSON
 CREATE TABLE products_flexible (
     id BIGINT PRIMARY KEY,
@@ -100,20 +185,35 @@ CREATE TABLE products_flexible (
 );
 ```
 
-#### **3. Pertimbangan Ukuran Document**
+Di sini, `metadata` bisa berbeda-beda tergantung jenis produk → JSON jadi solusi yang lebih praktis.
 
-**Batasan teknis:**
+#### 3. Pertimbangan Ukuran Document
 
-- Column `JSONB` bisa menyimpan hingga **255 MB** per document
-- Tapi "bisa" ≠ "sebaiknya"
+Terakhir, jangan lupa soal **ukuran data**.
 
-**Rekomendasi:**
+##### Batasan teknis
 
-- Jika JSON document sangat besar (puluhan MB), **performance akan menurun**
-- Lebih baik **pecah menjadi beberapa JSON column** yang lebih kecil
-- Akses menjadi lebih **scoped** dan **discrete**
+- Kolom `JSONB` di PostgreSQL bisa menyimpan hingga sekitar **255 MB per dokumen**
 
-**Contoh:**
+Tapi penting diingat:
+**“Bisa” tidak berarti “sebaiknya dilakukan.”**
+
+##### Rekomendasi praktis
+
+- Jika ukuran JSON sangat besar (misalnya puluhan MB):
+  - Query akan lebih berat
+  - Update bisa jadi mahal (costly)
+
+- Lebih baik **pecah menjadi beberapa kolom JSON yang lebih kecil**
+
+Dengan begitu:
+
+- Akses data jadi lebih fokus (scoped)
+- Performa lebih terjaga
+
+##### Contoh
+
+Desain kurang optimal:
 
 ```sql
 -- ❌ Satu JSON blob besar (30 MB)
@@ -121,7 +221,13 @@ CREATE TABLE user_data_bad (
     user_id BIGINT PRIMARY KEY,
     all_data JSONB  -- profile + preferences + history + analytics
 );
+```
 
+Semua data dimasukkan ke satu JSON besar → sulit di-manage dan berat diakses.
+
+Desain yang lebih baik:
+
+```sql
 -- ✅ Dipecah ke beberapa JSON column
 CREATE TABLE user_data_good (
     user_id BIGINT PRIMARY KEY,
@@ -132,107 +238,242 @@ CREATE TABLE user_data_good (
 );
 ```
 
+Dengan pemisahan ini:
+
+- Kamu hanya mengambil data yang dibutuhkan
+- Query lebih efisien
+- Update lebih terkontrol
+
+Dengan memahami tiga aspek ini—**access pattern, schema structure, dan ukuran data**—kamu bisa membuat keputusan desain yang lebih matang, tanpa terjebak ke salah satu ekstrem penggunaan JSON.
+
 ### c. JSON vs JSONB: Perbedaan Fundamental
 
-PostgreSQL menyediakan **dua tipe data** untuk JSON dengan karakteristik berbeda:
+Di PostgreSQL, ada dua tipe data untuk menyimpan JSON: **JSON** dan **JSONB**. Sekilas terlihat mirip, tapi sebenarnya cara kerja dan performanya cukup berbeda secara fundamental.
 
-#### **Perbandingan JSON vs JSONB**
+Supaya tidak salah pilih, kita perlu memahami bagaimana masing-masing tipe ini menyimpan dan memproses data.
 
-| Aspek              | JSON                      | JSONB                                |
-| ------------------ | ------------------------- | ------------------------------------ |
-| **Storage**        | Text format (lebih kecil) | Binary format (lebih besar)          |
-| **Parsing**        | Setiap kali diakses       | Sekali saat insert                   |
-| **Performance**    | Lambat untuk operasi      | Cepat untuk operasi                  |
-| **Whitespace**     | Dipertahankan             | Dihilangkan                          |
-| **Key order**      | Dipertahankan             | Tidak dijamin                        |
-| **Duplicate keys** | Dipertahankan             | Otomatis di-overwrite                |
-| **Indexing**       | Tidak bisa                | Bisa di-index                        |
-| **Use case**       | Legacy compatibility      | **Recommended untuk semua use case** |
+#### Perbandingan JSON vs JSONB
 
-#### **Contoh Perbedaan Storage Size**
+Mari kita bahas perbedaannya secara konseptual, bukan sekadar tabel:
+
+- **Storage**
+  - JSON disimpan dalam bentuk **teks mentah (raw text)** → ukurannya biasanya lebih kecil
+  - JSONB disimpan dalam bentuk **binary (sudah diproses)** → ukurannya lebih besar karena ada metadata tambahan
+
+- **Parsing**
+  - JSON: setiap kali diakses, harus di-parse ulang
+  - JSONB: hanya di-parse sekali saat insert → setelah itu siap digunakan
+
+- **Performance**
+  - JSON: cenderung lebih lambat untuk query dan manipulasi
+  - JSONB: jauh lebih cepat, karena sudah dalam format siap pakai
+
+- **Whitespace dan formatting**
+  - JSON mempertahankan spasi dan formatting asli
+  - JSONB akan “menormalkan” data (menghapus whitespace yang tidak perlu)
+
+- **Key order dan duplicate keys**
+  - JSON mempertahankan urutan key dan duplicate keys
+  - JSONB:
+    - Tidak menjamin urutan key
+    - Duplicate key akan di-overwrite (mengikuti standar JSON: key terakhir menang)
+
+- **Indexing**
+  - JSON tidak bisa di-index
+  - JSONB bisa di-index (misalnya dengan GIN index) → ini krusial untuk performa
+
+- **Use case**
+  - JSON: biasanya hanya untuk kompatibilitas atau kebutuhan khusus
+  - JSONB: **hampir selalu menjadi pilihan utama**
+
+#### Contoh Perbedaan Ukuran Storage
+
+Mari lihat bagaimana ukuran data berbeda antara JSON dan JSONB:
 
 ```sql
 -- Contoh sederhana
 SELECT
     pg_column_size('{"a": 1}'::JSON) as json_size,    -- 5 bytes
     pg_column_size('{"a": 1}'::JSONB) as jsonb_size;  -- 20 bytes
+```
 
--- Contoh lebih besar (overhead ter-amortisasi)
+Hasilnya:
+
+- JSON lebih kecil
+- JSONB lebih besar karena ada struktur internal tambahan
+
+Contoh lain dengan data lebih besar:
+
+```sql
 SELECT
     pg_column_size('{"a": "hello world"}'::JSON) as json_size,
     pg_column_size('{"a": "hello world"}'::JSONB) as jsonb_size;
--- Perbedaan mengecil untuk document lebih besar
 ```
 
-**Mengapa JSONB lebih besar?**
+Di sini, perbedaannya mulai mengecil. Kenapa?
+Karena overhead JSONB menjadi relatif kecil dibanding total ukuran data (istilahnya: _overhead ter-amortisasi_).
 
-- Sudah di-**parsed** dan di-**deconstruct**
-- Disimpan dalam **binary representation**
-- Menyimpan **metadata tambahan** untuk mempercepat query
-- Overhead ini worth it untuk performance gain
+##### Kenapa JSONB lebih besar?
 
-#### **Contoh Perbedaan Behavior: Whitespace**
+Karena JSONB:
+
+- Sudah di-parse saat disimpan
+- Dipecah ke struktur internal (deconstructed)
+- Disimpan dalam format binary
+- Menyimpan metadata tambahan untuk mempercepat query
+
+Semua ini menambah ukuran, tapi memberikan **keuntungan performa yang signifikan**.
+
+#### Contoh Behavior: Whitespace
+
+Perbedaan pertama yang mudah terlihat adalah cara menangani whitespace.
 
 ```sql
 -- JSON: mempertahankan whitespace
 SELECT '{"a":    "hello world"}'::JSON;
--- Output: {"a":    "hello world"}  (whitespace dipertahankan)
-
--- JSONB: menghilangkan whitespace
-SELECT '{"a":    "hello world"}'::JSONB;
--- Output: {"a":"hello world"}  (whitespace dihilangkan, normalized)
+-- Output: {"a":    "hello world"}
 ```
 
-#### **Contoh Perbedaan Behavior: Duplicate Keys**
+JSON menyimpan teks persis seperti input.
+
+```sql
+-- JSONB: menghilangkan whitespace
+SELECT '{"a":    "hello world"}'::JSONB;
+-- Output: {"a":"hello world"}
+```
+
+JSONB akan menormalkan format, sehingga lebih konsisten.
+
+#### Contoh Behavior: Duplicate Keys
+
+Sekarang lihat bagaimana duplicate key diperlakukan:
 
 ```sql
 -- JSON: mempertahankan duplicate keys
 SELECT '{"a": 1, "a": 2}'::JSON;
--- Output: {"a": 1, "a": 2}  (kedua key ada)
-
--- JSONB: mengikuti JSON spec (last key wins)
-SELECT '{"a": 1, "a": 2}'::JSONB;
--- Output: {"a":2}  (key pertama di-overwrite)
+-- Output: {"a": 1, "a": 2}
 ```
 
-#### **Contoh Perbedaan Behavior: Key Ordering**
+JSON tidak memproses isi—hanya menyimpan teks.
 
 ```sql
--- JSON: mempertahankan urutan key
-SELECT '{"z": 1, "a": 2, "m": 3}'::JSON;
--- Output: {"z": 1, "a": 2, "m": 3}  (urutan sama)
-
--- JSONB: tidak menjamin urutan (bisa berubah)
-SELECT '{"z": 1, "a": 2, "m": 3}'::JSONB;
--- Output: urutan bisa berbeda, tidak terjamin
+-- JSONB: key terakhir menang
+SELECT '{"a": 1, "a": 2}'::JSONB;
+-- Output: {"a":2}
 ```
+
+JSONB mengikuti aturan umum JSON: jika ada key duplikat, nilai terakhir yang digunakan.
+
+#### Contoh Behavior: Key Ordering
+
+Terakhir, soal urutan key:
+
+```sql
+-- JSON: mempertahankan urutan
+SELECT '{"z": 1, "a": 2, "m": 3}'::JSON;
+-- Output: {"z": 1, "a": 2, "m": 3}
+```
+
+Urutan tetap sama seperti input.
+
+```sql
+-- JSONB: urutan tidak dijamin
+SELECT '{"z": 1, "a": 2, "m": 3}'::JSONB;
+-- Output: bisa berubah urutannya
+```
+
+JSONB tidak menjamin urutan, karena fokusnya adalah efisiensi akses, bukan representasi teks.
+
+#### Kesimpulan Praktis
+
+Kalau kamu bekerja di PostgreSQL:
+
+- Gunakan **JSONB secara default**
+- Gunakan JSON hanya jika:
+  - Kamu butuh mempertahankan format asli (termasuk whitespace dan urutan)
+  - Atau untuk kebutuhan kompatibilitas tertentu
+
+Dalam hampir semua kasus nyata—terutama yang melibatkan query, indexing, dan performa—**JSONB adalah pilihan yang tepat**.
 
 ### d. Kapan Menggunakan JSON (bukan JSONB)?
 
-**⚠️ Use case JSON (sangat jarang):**
+Setelah memahami perbedaan antara JSON dan JSONB di PostgreSQL, pertanyaan berikutnya adalah: **apakah masih ada alasan untuk menggunakan JSON biasa?**
 
-1. **Legacy systems** yang bergantung pada:
+Jawaban singkatnya: **ada, tapi sangat jarang**. Mari kita bahas secara lebih terarah supaya kamu tahu kapan (dan kenapa) JSON masih relevan.
 
-   - Whitespace preservation
-   - Duplicate keys (walau tidak recommended)
-   - Key ordering (walau melanggar JSON spec)
+#### ⚠️ Use case JSON (sangat jarang)
 
-2. **Validasi saja** tanpa perlu operasi
-   - Hanya menyimpan dan mengembalikan text as-is
-   - Perlu validasi bahwa input adalah valid JSON
+Secara umum, JSON hanya digunakan dalam kondisi khusus yang memang membutuhkan sifat “mentah” dari data JSON.
 
-**✅ Recommended: Gunakan JSONB untuk semua use case modern**
+##### 1. Legacy systems
 
-- Lebih cepat untuk operasi
-- Bisa di-index
-- Mengikuti JSON spec dengan benar
-- Support semua fitur PostgreSQL untuk JSON
+Beberapa sistem lama (legacy) memiliki ketergantungan pada cara data JSON disimpan secara persis seperti input aslinya.
+
+Contohnya:
+
+- **Whitespace preservation**
+  Sistem mengandalkan format teks JSON, termasuk spasi dan indentation.
+  JSON mempertahankan ini, sedangkan JSONB akan menghapusnya.
+
+- **Duplicate keys**
+  Meskipun tidak direkomendasikan secara standar JSON, ada sistem yang tetap menggunakan key duplikat.
+  JSON akan menyimpan semuanya, sementara JSONB hanya menyimpan key terakhir.
+
+- **Key ordering**
+  Ada kasus di mana urutan key dianggap penting (misalnya untuk hashing atau signature tertentu).
+  JSON mempertahankan urutan, JSONB tidak menjaminnya.
+
+Intinya, jika kamu bekerja dengan sistem lama yang sensitif terhadap representasi teks JSON secara persis, maka JSON bisa jadi diperlukan.
+
+##### 2. Validasi tanpa operasi
+
+Use case lain adalah ketika kamu hanya butuh JSON sebagai **validator format**, bukan sebagai data yang akan diolah.
+
+Misalnya:
+
+- Kamu hanya ingin memastikan input adalah JSON yang valid
+- Data disimpan dan diambil kembali **tanpa perubahan sama sekali**
+- Tidak ada kebutuhan untuk:
+  - Query field di dalam JSON
+  - Update sebagian isi JSON
+  - Indexing
+
+Dalam kasus ini, JSON cukup karena:
+
+- Dia menyimpan data persis seperti input
+- Tidak ada overhead parsing seperti JSONB
+
+#### ✅ Rekomendasi utama
+
+Untuk hampir semua use case modern di PostgreSQL, pilihan terbaik adalah:
+
+- Gunakan **JSONB sebagai default**
+
+Alasannya jelas:
+
+- **Lebih cepat** untuk query dan manipulasi data
+- Bisa dibuat **index** → sangat penting untuk performa
+- Mengikuti **JSON specification** dengan lebih konsisten
+- Mendukung berbagai fitur PostgreSQL seperti:
+  - Query operator (`->`, `->>`)
+  - Partial update
+  - GIN index
+
+#### Kesimpulan praktis
+
+Anggap JSON sebagai opsi khusus untuk kebutuhan yang sangat spesifik, seperti kompatibilitas dengan sistem lama atau kebutuhan representasi teks mentah.
+
+Di luar itu, untuk aplikasi modern—terutama yang butuh performa, fleksibilitas query, dan skalabilitas—**JSONB adalah pilihan yang hampir selalu tepat**.
 
 ### e. Preview: Operasi pada JSONB
 
-PostgreSQL menyediakan banyak operator dan fungsi untuk bekerja dengan JSONB:
+Salah satu alasan utama kenapa JSONB sangat powerful di PostgreSQL adalah karena banyaknya operator dan fungsi yang bisa digunakan untuk mengakses dan memanipulasi datanya.
 
-#### **Ekstraksi Value dengan Operator `->`**
+Di bagian ini, kita akan melihat beberapa operasi dasar yang paling sering digunakan. Anggap ini sebagai “preview” sebelum masuk ke pembahasan yang lebih dalam.
+
+#### Ekstraksi Value dengan Operator `->`
+
+Operator `->` digunakan untuk mengambil value dari JSONB, tetapi hasilnya **masih dalam bentuk JSON (bukan text biasa)**.
 
 ```sql
 -- Ekstrak value (hasil masih JSONB)
@@ -240,7 +481,17 @@ SELECT '{"string": "hello world", "number": 42}'::JSONB -> 'string';
 -- Output: "hello world"  (masih ada quotes, tipe JSONB)
 ```
 
-#### **Ekstraksi Text dengan Operator `->>`**
+Penjelasan:
+
+- Kita mengambil key `"string"`
+- Hasilnya `"hello world"` masih memiliki tanda kutip
+- Ini karena tipe datanya tetap JSONB, bukan string biasa
+
+Gunakan operator ini jika kamu masih ingin memproses hasilnya sebagai JSON.
+
+#### Ekstraksi Text dengan Operator `->>`
+
+Kalau kamu ingin hasil dalam bentuk **text biasa (tanpa tanda kutip)**, gunakan `->>`.
 
 ```sql
 -- Ekstrak sebagai text (unquoted)
@@ -248,7 +499,16 @@ SELECT '{"string": "hello world", "number": 42}'::JSONB ->> 'string';
 -- Output: hello world  (tanpa quotes, tipe TEXT)
 ```
 
-#### **Akses Nested Objects**
+Perbedaannya penting:
+
+- `->` → hasil JSON
+- `->>` → hasil TEXT
+
+Biasanya `->>` lebih sering dipakai untuk kebutuhan query biasa (misalnya filtering atau ditampilkan ke user).
+
+#### Akses Nested Objects
+
+JSON sering memiliki struktur bertingkat (nested). Kamu bisa mengaksesnya dengan chaining operator `->`.
 
 ```sql
 SELECT '{
@@ -260,7 +520,17 @@ SELECT '{
 -- Output: "value"
 ```
 
-#### **Akses Array Elements**
+Penjelasan:
+
+- Ambil `objects`
+- Lalu ambil `key` di dalamnya
+- Hasil tetap dalam format JSONB (`"value"`)
+
+Ini seperti menavigasi object di JavaScript: `obj.objects.key`
+
+#### Akses Array Elements
+
+JSONB juga mendukung array, dan kamu bisa mengakses elemennya dengan index.
 
 ```sql
 -- Menggunakan index array
@@ -270,7 +540,18 @@ SELECT '{
 -- Output: 30  (index dimulai dari 0)
 ```
 
-#### **Path Expressions dengan `#>` Operator**
+Catatan penting:
+
+- Index dimulai dari **0**, bukan 1
+- Jadi:
+  - `0` → 10
+  - `1` → 20
+  - `2` → 30
+
+#### Path Expressions dengan `#>` Operator
+
+Kalau struktur JSON cukup dalam, chaining `->` bisa jadi panjang.
+Di sinilah operator `#>` berguna, karena kita bisa langsung menentukan path.
 
 ```sql
 -- Akses nested structure dengan path
@@ -284,45 +565,98 @@ SELECT '{
 -- Output: "deep value"
 ```
 
-**Operasi lain yang akan dibahas di module JSON:**
+Penjelasan:
 
-- Check keberadaan keys
-- Check overlap dalam structure
-- Array operations
-- JSON patching/updating
-- Indexing strategies
+- Path ditulis sebagai array: `{objects,nested,key}`
+- PostgreSQL akan langsung menelusuri struktur tersebut
+
+Ini lebih ringkas dan sering lebih nyaman untuk struktur yang kompleks.
+
+#### Operasi lain yang akan dibahas
+
+Selain operator dasar di atas, PostgreSQL masih punya banyak fitur lanjutan untuk JSONB, seperti:
+
+- Mengecek apakah suatu key ada
+- Mengecek overlap antar struktur JSON
+- Operasi pada array (filter, expand, dll)
+- Update sebagian isi JSON (JSON patching)
+- Strategi indexing untuk performa tinggi
+
+Semua ini membuat JSONB bukan sekadar tempat menyimpan data fleksibel, tapi juga alat yang sangat kuat untuk query dan manipulasi data semi-structured langsung di dalam database.
 
 ### f. Best Practices untuk JSON di PostgreSQL
 
-**Checklist keputusan:**
+Setelah memahami kapan menggunakan JSON, JSONB, dan kolom biasa, sekarang kita rangkum dalam bentuk **panduan praktis** yang bisa kamu pakai saat mendesain schema di PostgreSQL.
 
-```
-┌─ Apakah field ini sering di-query? ───► Ya ──► Top-level column
-│                                         │
-│                                         No
-│                                         │
-├─ Apakah schema rigid dan well-defined? ─► Ya ──► Pertimbangkan kolom terpisah
-│                                         │
-│                                         No
-│                                         │
-├─ Apakah field di-update independen? ───► Ya ──► Pertimbangkan kolom terpisah
-│                                         │
-│                                         No
-│                                         │
-├─ Apakah document sangat besar (>10MB)?──► Ya ──► Pecah ke multiple JSON columns
-│                                         │
-│                                         No
-│                                         │
-└─ Gunakan JSONB untuk flexibility ──────────────► ✅
-```
+Tujuannya sederhana: membantu kamu mengambil keputusan dengan cepat tanpa harus menebak-nebak.
 
-**Golden Rules:**
+#### Checklist keputusan
 
-1. **Gunakan JSONB** (bukan JSON) untuk hampir semua kasus
-2. **Top-level columns** untuk data yang sering di-query
-3. **JSON columns** untuk flexible/semi-structured data
-4. **Pertimbangkan ukuran** document (jangan terlalu besar)
-5. **PostgreSQL bekerja terbaik** dengan typed columns yang discrete
+Bayangkan kamu sedang menentukan apakah sebuah field sebaiknya disimpan sebagai JSONB atau kolom biasa. Gunakan alur berpikir berikut:
+
+- **Apakah field ini sering di-query?**
+  Jika _ya_, maka:
+  - Simpan sebagai **top-level column**
+
+  Kenapa?
+  Karena kolom biasa lebih cepat untuk filtering, indexing, dan lookup.
+
+- **Jika tidak sering di-query → lanjutkan**
+  Tanyakan: apakah struktur datanya **rigid dan well-defined**?
+  - Jika _ya_:
+    - Lebih baik gunakan **kolom terpisah**
+
+  Artinya, struktur sudah jelas dan stabil → tidak perlu fleksibilitas JSON.
+
+- **Jika schema tidak rigid → lanjutkan**
+  Tanyakan: apakah field sering di-update secara independen?
+  - Jika _ya_:
+    - Pertimbangkan **kolom terpisah**
+
+  Karena update parsial pada JSON bisa lebih kompleks dibanding update kolom biasa.
+
+- **Jika tidak → lanjutkan**
+  Tanyakan: apakah ukuran document sangat besar (misalnya >10MB)?
+  - Jika _ya_:
+    - **Jangan simpan dalam satu JSON besar**
+    - Pecah menjadi beberapa JSON column
+
+  Ini penting untuk menjaga performa tetap optimal.
+
+- **Jika semua kondisi di atas tidak terpenuhi**
+  Maka:
+  - Gunakan **JSONB** sebagai solusi fleksibel
+
+Dengan pola ini, kamu tidak akan “asal pakai JSON”, tapi benar-benar berdasarkan kebutuhan.
+
+#### Golden Rules
+
+Sebagai ringkasan, berikut prinsip-prinsip yang sebaiknya kamu pegang saat bekerja dengan JSON di PostgreSQL:
+
+1. **Gunakan JSONB (bukan JSON) untuk hampir semua kasus**
+   JSONB memberikan performa lebih baik, bisa di-index, dan lebih powerful untuk query.
+
+2. **Gunakan top-level columns untuk data yang sering di-query**
+   Misalnya: email, username, status, atau field yang sering dipakai di WHERE clause.
+
+3. **Gunakan JSON columns untuk data yang fleksibel atau semi-structured**
+   Cocok untuk:
+   - Preferences user
+   - Metadata tambahan
+   - Data yang tidak selalu konsisten strukturnya
+
+4. **Perhatikan ukuran document**
+   Jangan biarkan satu JSON menjadi terlalu besar:
+   - Sulit di-query
+   - Berat saat di-update
+   - Bisa menurunkan performa
+
+5. **PostgreSQL bekerja paling optimal dengan typed columns yang jelas**
+   Artinya:
+   - Gunakan tipe data yang spesifik jika memungkinkan
+   - Gunakan JSON sebagai pelengkap, bukan pengganti total desain relasional
+
+Dengan mengikuti best practices ini, kamu bisa memanfaatkan fleksibilitas JSON tanpa mengorbankan kekuatan utama database relasional seperti PostgreSQL.
 
 ## 3. Hubungan Antar Konsep
 

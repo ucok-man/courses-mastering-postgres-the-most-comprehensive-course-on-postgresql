@@ -8,9 +8,15 @@ Video ini membahas tentang tipe data **serial** di PostgreSQL, yang sebenarnya a
 
 ### a. Apa itu Serial?
 
-**Serial bukan tipe data sebenarnya** - ini adalah alias yang di balik layar melakukan beberapa hal sekaligus.
+#### Memahami Konsep Dasar Serial
 
-**Deklarasi sederhana:**
+Di PostgreSQL, **`SERIAL` sebenarnya bukan tipe data murni** seperti `INTEGER` atau `TEXT`. Ia hanyalah sebuah _shortcut_ atau alias yang memudahkan kita membuat kolom dengan nilai auto-increment.
+
+Artinya, ketika kita menulis `SERIAL`, PostgreSQL akan menjalankan beberapa perintah tambahan secara otomatis di balik layar. Jadi, `SERIAL` itu lebih seperti “paket otomatis” daripada tipe data baru.
+
+Mari kita lihat contoh sederhananya.
+
+#### Deklarasi Sederhana Menggunakan SERIAL
 
 ```sql
 CREATE TABLE example (
@@ -18,7 +24,11 @@ CREATE TABLE example (
 );
 ```
 
-**Apa yang sebenarnya terjadi di balik layar:**
+Sekilas terlihat sederhana. Kita hanya membuat kolom `id` dengan tipe `SERIAL`. Tapi sebenarnya, PostgreSQL melakukan lebih banyak pekerjaan dari yang terlihat.
+
+#### Apa yang Sebenarnya Terjadi di Balik Layar
+
+Jika kita uraikan secara manual, inilah yang sebenarnya dilakukan PostgreSQL:
 
 ```sql
 -- 1. Membuat sequence
@@ -35,45 +45,284 @@ ALTER SEQUENCE example_id_seq
 OWNED BY example.id;
 ```
 
-**Penjelasan komponen:**
+Sekarang mari kita pahami satu per satu dengan runtut.
 
-1. **Sequence dibuat** - Object terpisah yang menghasilkan angka berurutan
-2. **Kolom INTEGER NOT NULL** - Tipe data sebenarnya adalah integer
-3. **DEFAULT nextval()** - Setiap insert otomatis memanggil fungsi untuk mendapat nilai berikutnya
-4. **OWNED BY** - Sequence akan terhapus otomatis jika tabel/kolom dihapus
+#### 1. Sequence Dibuat
+
+PostgreSQL membuat sebuah **sequence**, yaitu objek database khusus yang bertugas menghasilkan angka secara berurutan.
+
+Contohnya:
+
+- Insert pertama → 1
+- Insert kedua → 2
+- Insert ketiga → 3
+- dan seterusnya
+
+Sequence ini berdiri sebagai objek terpisah dari tabel. Jadi sebenarnya, yang menghasilkan angka bukan kolomnya, tapi sequence tersebut.
+
+#### 2. Kolom Sebenarnya Bertipe INTEGER NOT NULL
+
+Walaupun kita menulis `SERIAL`, tipe data yang benar-benar digunakan adalah:
+
+```sql
+INTEGER NOT NULL
+```
+
+Jadi `SERIAL` hanyalah cara cepat untuk membuat kolom `INTEGER` yang tidak boleh `NULL`.
+
+#### 3. DEFAULT nextval()
+
+Bagian terpenting ada di sini:
+
+```sql
+DEFAULT nextval('example_id_seq')
+```
+
+Setiap kali kita melakukan `INSERT` tanpa menyebutkan nilai `id`, PostgreSQL akan otomatis menjalankan:
+
+```sql
+nextval('example_id_seq')
+```
+
+Fungsi `nextval()` akan mengambil angka berikutnya dari sequence.
+
+Contoh:
+
+```sql
+INSERT INTO example DEFAULT VALUES;
+INSERT INTO example DEFAULT VALUES;
+INSERT INTO example DEFAULT VALUES;
+```
+
+Hasilnya:
+
+| id  |
+| --- |
+| 1   |
+| 2   |
+| 3   |
+
+Kita tidak pernah mengisi `id`, tetapi nilainya tetap bertambah secara otomatis.
+
+#### 4. OWNED BY
+
+Terakhir, PostgreSQL menjalankan:
+
+```sql
+ALTER SEQUENCE example_id_seq
+OWNED BY example.id;
+```
+
+Artinya:
+
+- Sequence tersebut dimiliki oleh kolom `example.id`
+- Jika tabel atau kolom tersebut dihapus, sequence juga ikut terhapus otomatis
+
+Ini penting agar database tetap bersih dan tidak meninggalkan sequence yang tidak terpakai.
+
+#### Kesimpulan yang Perlu Dipahami
+
+Ketika kita menulis:
+
+```sql
+id SERIAL
+```
+
+PostgreSQL sebenarnya melakukan tiga hal besar:
+
+1. Membuat sequence terpisah
+2. Membuat kolom `INTEGER NOT NULL`
+3. Mengatur default value menggunakan `nextval()`
+4. Menghubungkan sequence ke kolom dengan `OWNED BY`
+
+Jadi, `SERIAL` hanyalah cara ringkas untuk membuat kolom auto-increment berbasis `INTEGER` dengan sequence di belakangnya.
+
+Memahami mekanisme ini penting, terutama ketika kita mulai berurusan dengan migrasi database, reset sequence, atau debugging masalah auto-increment yang lompat angkanya.
 
 ### b. Serial vs Identity (PostgreSQL 10+)
 
-**Status serial saat ini:**
+#### Status `SERIAL` Saat Ini
 
-- ✅ Masih valid dan bisa digunakan
-- ⚠️ **Tidak lagi recommended** untuk primary key sejak PostgreSQL 10
-- 🆕 **Identity columns** adalah cara yang lebih baik (akan dibahas di video terpisah)
+Sejak PostgreSQL 10, cara mendefinisikan kolom auto-increment mengalami perubahan arah. Perlu dipahami bahwa:
 
-**Mengapa identity lebih baik:**
+- `SERIAL` **masih valid dan tetap bisa digunakan**
+- Namun, **tidak lagi direkomendasikan untuk primary key pada project baru**
+- PostgreSQL memperkenalkan fitur baru bernama **Identity Columns**
 
-- Lebih sederhana
-- Lebih sedikit caveat terkait permissions
-- Syntax lebih standar SQL
+Jadi ini bukan soal `SERIAL` salah atau deprecated total. Ia tetap bekerja dengan baik. Hanya saja, PostgreSQL kini menyediakan pendekatan yang lebih modern dan lebih sesuai standar SQL.
 
-**Catatan penting:**
+Jika kamu punya project lama (misalnya dibuat di PostgreSQL 9 atau sebelumnya), tidak ada kewajiban untuk migrasi. `SERIAL` tetap aman dan stabil digunakan.
+
+#### Apa Itu Identity Column?
+
+Identity column adalah cara baru untuk membuat kolom auto-increment yang lebih standar dan lebih bersih secara desain.
+
+Contohnya:
 
 ```sql
--- Jika sudah pakai serial dari PostgreSQL 9, tidak perlu migrasi
--- Serial masih perfectly fine, hanya tidak recommended untuk project baru
+CREATE TABLE example (
+    id INTEGER GENERATED ALWAYS AS IDENTITY
+);
 ```
+
+Atau:
+
+```sql
+CREATE TABLE example (
+    id INTEGER GENERATED BY DEFAULT AS IDENTITY
+);
+```
+
+Sekilas terlihat mirip dengan `SERIAL`, tetapi ada perbedaan penting secara internal dan konseptual.
+
+#### Mengapa Identity Lebih Baik?
+
+Ada beberapa alasan kenapa PostgreSQL merekomendasikan identity dibanding serial untuk project baru.
+
+##### 1. Lebih Sederhana Secara Konseptual
+
+Pada `SERIAL`, seperti yang sudah kita bahas sebelumnya, PostgreSQL diam-diam:
+
+- Membuat sequence terpisah
+- Mengatur default `nextval()`
+- Mengatur ownership sequence
+
+Identity column menyederhanakan semuanya. Sequence tetap ada di belakang layar, tetapi pengelolaannya menjadi bagian resmi dari definisi kolom, bukan “trik alias” seperti `SERIAL`.
+
+Dengan kata lain, identity adalah fitur yang memang dirancang sebagai bagian dari standar sistem auto-increment.
+
+##### 2. Lebih Sedikit Caveat Terkait Permissions
+
+Pada `SERIAL`, karena sequence adalah objek terpisah, kadang muncul masalah permission.
+
+Misalnya:
+
+- User bisa insert ke tabel
+- Tapi tidak punya akses ke sequence
+- Akibatnya insert gagal karena tidak bisa memanggil `nextval()`
+
+Dengan identity column, PostgreSQL menangani ini dengan lebih rapi karena sequence benar-benar dianggap bagian dari kolom tersebut.
+
+##### 3. Lebih Standar SQL
+
+Identity column mengikuti standar SQL modern (SQL:2011).
+
+Artinya:
+
+- Lebih portable secara konsep
+- Lebih future-proof
+- Lebih sesuai best practice database modern
+
+Sementara `SERIAL` adalah fitur khas PostgreSQL (non-standard).
+
+#### ALWAYS vs BY DEFAULT
+
+Identity memiliki dua mode penting:
+
+```sql
+GENERATED ALWAYS AS IDENTITY
+```
+
+Artinya:
+
+- PostgreSQL selalu menghasilkan nilai otomatis
+- Kita tidak bisa mengisi nilai secara manual kecuali menggunakan `OVERRIDING SYSTEM VALUE`
+
+Sedangkan:
+
+```sql
+GENERATED BY DEFAULT AS IDENTITY
+```
+
+Artinya:
+
+- Secara default PostgreSQL mengisi otomatis
+- Tapi kita masih boleh mengisi manual jika diperlukan
+
+Ini memberikan kontrol yang lebih eksplisit dibanding `SERIAL`.
+
+#### Catatan Penting untuk Project Lama
+
+Jika kamu sudah menggunakan `SERIAL` sejak PostgreSQL 9 atau sebelumnya:
+
+```sql
+-- Tidak perlu migrasi
+-- Serial masih perfectly fine
+```
+
+Tidak ada urgensi untuk mengubah semuanya menjadi identity.
+
+`SERIAL` tetap stabil dan tidak akan tiba-tiba rusak. Hanya saja, untuk project baru, lebih baik langsung menggunakan identity column agar mengikuti best practice terbaru.
+
+#### Ringkasan yang Perlu Dipahami
+
+- `SERIAL` masih valid, tapi bukan lagi pilihan utama
+- Identity column adalah pendekatan modern dan standar
+- Identity lebih bersih secara desain dan lebih aman dari sisi permission
+- Tidak wajib migrasi jika sudah menggunakan serial
+
+Sebagai developer, memahami perbedaan ini penting agar ketika membuat schema baru, kita bisa memilih pendekatan yang lebih tepat dan sesuai arah perkembangan PostgreSQL saat ini.
 
 ### c. Varian Serial
 
-PostgreSQL menyediakan beberapa varian serial berdasarkan ukuran:
+#### Mengapa Ada Beberapa Varian Serial?
 
-| Tipe          | Underlying Type | Range                          | Catatan          |
-| ------------- | --------------- | ------------------------------ | ---------------- |
-| `SMALLSERIAL` | `SMALLINT`      | 1 to 32,767                    | Jarang digunakan |
-| `SERIAL`      | `INTEGER`       | 1 to 2,147,483,647             | ~2.1 miliar      |
-| `BIGSERIAL`   | `BIGINT`        | 1 to 9,223,372,036,854,775,807 | **Recommended**  |
+PostgreSQL menyediakan beberapa jenis `SERIAL` karena kebutuhan setiap sistem berbeda-beda. Tidak semua tabel akan menyimpan jutaan atau miliaran data. Ada yang kecil, ada yang sangat besar.
 
-**Contoh:**
+Setiap varian `SERIAL` sebenarnya hanya berbeda pada **ukuran tipe integer yang digunakan di belakang layar**. Semakin besar tipe datanya, semakin besar pula angka maksimum yang bisa ditampung.
+
+Mari kita bahas satu per satu dengan pemahaman yang runtut.
+
+#### SMALLSERIAL
+
+- **Underlying type:** `SMALLINT`
+- **Range:** 1 sampai 32.767
+- **Kapan dipakai?** Sangat jarang
+
+`SMALLSERIAL` menggunakan tipe `SMALLINT` (2 byte). Artinya, maksimal hanya sekitar 32 ribu data.
+
+Secara teori bisa digunakan untuk tabel kecil, misalnya tabel kategori statis yang jumlahnya sangat terbatas. Tetapi dalam praktik nyata, ini jarang dipakai karena:
+
+- Batasnya terlalu kecil
+- Risiko cepat penuh jika sistem berkembang
+
+Biasanya developer langsung memilih `SERIAL` atau `BIGSERIAL`.
+
+#### SERIAL
+
+- **Underlying type:** `INTEGER`
+- **Range:** 1 sampai 2.147.483.647 (~2,1 miliar)
+
+Ini adalah varian yang paling umum digunakan secara historis.
+
+Karena menggunakan `INTEGER` (4 byte), ia mampu menyimpan lebih dari 2 miliar angka unik. Untuk banyak aplikasi skala kecil hingga menengah, angka ini sudah lebih dari cukup.
+
+Namun, pada sistem besar seperti:
+
+- E-commerce skala nasional
+- Sistem log aktivitas
+- Event tracking
+- Sistem transaksi besar
+
+Angka 2 miliar bisa saja tercapai dalam jangka panjang.
+
+#### BIGSERIAL
+
+- **Underlying type:** `BIGINT`
+- **Range:** 1 sampai 9.223.372.036.854.775.807
+- **Rekomendasi:** Paling aman untuk project modern
+
+`BIGSERIAL` menggunakan `BIGINT` (8 byte). Batasnya sangat besar — sekitar 9 quintillion.
+
+Secara praktis, hampir mustahil habis dalam sistem normal.
+
+Karena itu, untuk project baru, banyak developer langsung memilih `BIGSERIAL` agar:
+
+- Lebih future-proof
+- Tidak perlu migrasi tipe data di masa depan
+- Aman untuk pertumbuhan jangka panjang
+
+#### Contoh Penggunaan BIGSERIAL
 
 ```sql
 CREATE TABLE users (
@@ -82,52 +331,184 @@ CREATE TABLE users (
 );
 ```
 
-### d. Rekomendasi Krusial: Gunakan BIGSERIAL untuk Primary Keys
+Mari kita pahami apa yang terjadi di sini:
 
-**⚠️ SANGAT PENTING:** Ini adalah **satu-satunya kasus** di mana disarankan menggunakan tipe data yang "terlalu besar".
+1. PostgreSQL membuat sequence otomatis.
+2. Kolom `id` sebenarnya bertipe `BIGINT NOT NULL`.
+3. Default value menggunakan `nextval()` dari sequence tersebut.
+4. `PRIMARY KEY` menambahkan constraint unik + index otomatis.
 
-**Prinsip umum di course ini:**
-
-> "Pilih tipe data terkecil yang sesuai dengan data terbesar"
-
-**KECUALI untuk primary keys:**
-
-> "Berikan ruang sebesar mungkin untuk growth - gunakan BIGSERIAL"
-
-**Alasan:**
-
-- Running out of primary key space adalah **disaster**
-- Sangat sulit dan menyakitkan untuk di-fix
-- Butuh downtime dan migration yang kompleks
-
-**Real-world case study - Basecamp:**
+Ketika kita melakukan insert:
 
 ```sql
--- Basecamp menggunakan INTEGER untuk primary key
--- Mereka pikir 2.1 miliar cukup
--- TERNYATA TIDAK CUKUP
--- Mereka kehabisan primary key space dan mengalami masalah besar
+INSERT INTO users (name) VALUES ('Alvin');
+INSERT INTO users (name) VALUES ('Budi');
+INSERT INTO users (name) VALUES ('Citra');
 ```
 
-**Best practice:**
+Hasilnya:
+
+| id  | name  |
+| --- | ----- |
+| 1   | Alvin |
+| 2   | Budi  |
+| 3   | Citra |
+
+Nilai `id` bertambah otomatis tanpa kita perlu mengisinya secara manual.
+
+#### Mana yang Sebaiknya Dipilih?
+
+Secara praktis:
+
+- Hindari `SMALLSERIAL` kecuali benar-benar yakin datanya sangat kecil.
+- `SERIAL` masih aman untuk banyak kasus.
+- `BIGSERIAL` adalah pilihan paling aman untuk project baru.
+
+Biaya tambahan penyimpanan `BIGINT` dibanding `INTEGER` biasanya sangat kecil dibanding risiko harus migrasi skema ketika angka habis.
+
+Sebagai developer, penting untuk berpikir bukan hanya untuk kebutuhan hari ini, tetapi juga untuk pertumbuhan sistem di masa depan.
+
+### d. Rekomendasi Krusial: Gunakan BIGSERIAL untuk Primary Keys
+
+#### Prinsip Umum Memilih Tipe Data
+
+Dalam desain database, ada satu prinsip penting yang hampir selalu benar:
+
+> Pilih tipe data terkecil yang masih mampu menampung nilai terbesar yang mungkin muncul.
+
+Kenapa? Karena:
+
+- Lebih hemat storage
+- Lebih efisien secara performa
+- Lebih disiplin dalam desain skema
+
+Misalnya, kalau angka hanya sampai 100, kita tidak perlu `BIGINT`. Cukup `SMALLINT` atau `INTEGER`.
+
+Namun…
+
+#### Satu-Satunya Pengecualian: Primary Key
+
+Untuk **primary key**, prinsip di atas justru dibalik.
+
+> Untuk primary key, berikan ruang sebesar mungkin untuk pertumbuhan.
+
+Artinya: gunakan `BIGSERIAL`.
+
+Ini adalah satu-satunya kasus di mana kita justru disarankan memakai tipe yang “terlalu besar”.
+
+#### Kenapa Running Out of Primary Key Space Itu Bencana?
+
+Primary key adalah identitas unik setiap row. Ia biasanya:
+
+- Direferensikan oleh banyak foreign key
+- Menjadi pusat relasi antar tabel
+- Digunakan di index dan join
+
+Kalau primary key habis (misalnya `INTEGER` mencapai 2.147.483.647), maka:
+
+- Insert baru akan gagal
+- Sistem bisa berhenti menerima data baru
+- Kita harus melakukan migrasi tipe dari `INTEGER` ke `BIGINT`
+
+Masalahnya, migrasi ini tidak sederhana.
+
+Bayangkan:
+
+- Tabel utama punya ratusan juta row
+- Banyak tabel lain punya foreign key yang mengarah ke sana
+- Harus mengubah tipe di semua tabel terkait
+- Harus rebuild index
+- Potensi downtime besar
+
+Ini bukan sekadar perubahan kecil. Ini operasi besar yang menyakitkan.
+
+#### Real-World Case: Basecamp
+
+Ada studi kasus nyata dari Basecamp.
+
+Mereka menggunakan `INTEGER` untuk primary key, dengan asumsi:
+
+> 2,1 miliar row? Tidak mungkin tercapai.
+
+Ternyata mereka salah.
+
+Skala sistem bertumbuh lebih cepat dari perkiraan. Mereka akhirnya benar-benar kehabisan ruang primary key dan harus melakukan migrasi besar-besaran.
+
+Kasus seperti ini menunjukkan satu hal penting:
+
+Kita sering meremehkan pertumbuhan sistem.
+
+#### Perbandingan Praktis
+
+Contoh yang tidak direkomendasikan:
 
 ```sql
--- ❌ JANGAN
 CREATE TABLE users (
-    id SERIAL PRIMARY KEY  -- Hanya 2.1 miliar
+    id SERIAL PRIMARY KEY  -- Maksimal ~2.1 miliar
 );
+```
 
--- ✅ LAKUKAN
+Di sini, `SERIAL` berarti menggunakan `INTEGER`. Batasnya sekitar 2,1 miliar.
+
+Sekarang bandingkan dengan:
+
+```sql
 CREATE TABLE users (
     id BIGSERIAL PRIMARY KEY  -- 9+ quintillion
 );
 ```
 
+`BIGSERIAL` menggunakan `BIGINT` dengan batas sekitar 9 quintillion (9.223.372.036.854.775.807).
+
+Secara praktis, angka ini hampir mustahil habis dalam skenario normal.
+
+#### Apakah BIGSERIAL Membebani Storage?
+
+Perbedaannya:
+
+- `INTEGER` → 4 byte
+- `BIGINT` → 8 byte
+
+Artinya, hanya selisih 4 byte per row.
+
+Dalam sistem modern, tambahan 4 byte untuk keamanan jangka panjang hampir selalu layak dibanding risiko migrasi besar di masa depan.
+
+Apalagi primary key hampir selalu menjadi fondasi sistem relasional.
+
+#### Best Practice yang Perlu Diingat
+
+Untuk kolom biasa:
+
+- Gunakan tipe sekecil mungkin yang masih masuk akal.
+
+Untuk primary key:
+
+- Gunakan `BIGSERIAL` (atau `BIGINT GENERATED AS IDENTITY` di PostgreSQL 10+).
+- Anggap ini sebagai investasi jangka panjang.
+
+Kesalahan memilih tipe primary key mungkin tidak terasa hari ini. Tapi ketika sistem tumbuh besar, kesalahan itu bisa berubah menjadi masalah operasional yang sangat mahal.
+
+Karena itu, untuk primary key:
+
+Pilih ruang sebesar mungkin. Gunakan `BIGSERIAL`.
+
 ### e. Gaps dalam Sequence: Mengapa Terjadi?
 
-**Gap dalam sequence adalah NORMAL dan AMAN** - bukan bug, tapi fitur!
+#### Gap dalam Sequence Itu Normal dan Aman
 
-**Skenario 1: Transaction Rollback**
+Banyak developer kaget ketika melihat ID meloncat, misalnya dari 4 langsung ke 6. Lalu muncul pertanyaan:
+
+“Kenapa 5 hilang? Apakah ini bug?”
+
+Jawabannya: **bukan bug**. Ini adalah desain yang disengaja.
+
+Sequence di PostgreSQL memang **boleh memiliki gap**, dan itu sepenuhnya normal serta aman. Bahkan, justru ini yang membuat sistem tetap konsisten dan aman dalam kondisi transaksi paralel.
+
+Mari kita pahami melalui beberapa skenario nyata.
+
+#### Skenario 1: Transaction Rollback
+
+Perhatikan contoh berikut:
 
 ```sql
 -- Transaction 1 dimulai
@@ -146,221 +527,611 @@ COMMIT;
 -- Hasil: id 1,2,3,4,6 (id 5 hilang selamanya)
 ```
 
-**Mengapa ini desain yang bagus:**
+Apa yang terjadi di sini?
+
+1. Transaction 1 melakukan `INSERT`.
+2. Sequence dipanggil melalui `nextval()`, dan menghasilkan angka 5.
+3. Tapi kemudian transaction tersebut di-rollback.
+4. Artinya row tidak pernah benar-benar tersimpan.
+5. Namun angka 5 sudah terlanjur “dikonsumsi”.
+
+Lalu Transaction 2 berjalan dan mendapatkan angka berikutnya: 6.
+
+Hasil akhirnya:
 
 ```
-Tanpa gaps (transaction-aware):
-┌─────────────┬─────────────┐
-│ Transaction 1│ Transaction 2│
-├─────────────┼─────────────┤
-│ Dapat ID 5  │ Dapat ID 5  │  ❌ DUPLICATE!
-│ COMMIT      │ COMMIT      │  ❌ ERROR saat commit
-└─────────────┴─────────────┘
-
-Dengan gaps (tidak transaction-aware):
-┌─────────────┬─────────────┐
-│ Transaction 1│ Transaction 2│
-├─────────────┼─────────────┤
-│ Dapat ID 5  │ Dapat ID 6  │  ✅ Berbeda
-│ ROLLBACK    │ COMMIT      │  ✅ Sukses
-│ (5 hilang)  │             │  ✅ Aman
-└─────────────┴─────────────┘
+1, 2, 3, 4, 6
 ```
 
-**Skenario 2: Concurrent Transactions**
+ID 5 hilang selamanya.
 
-Sequence increment **tidak di-rollback** karena:
+Dan itu memang disengaja.
 
-- Mencegah duplicate key errors
-- Memastikan concurrent transactions tidak bentrok
-- Performance: tidak perlu locking yang kompleks
+#### Mengapa Sequence Tidak Ikut Rollback?
 
-**Kapan gaps masalah:**
+Sequence di PostgreSQL **tidak transaction-aware**. Artinya, ketika `nextval()` dipanggil, angka tersebut langsung dianggap terpakai — walaupun nanti transaksinya gagal.
+
+Kenapa desainnya seperti ini?
+
+Mari kita bandingkan dua pendekatan.
+
+Jika Sequence Ikut Rollback (Tanpa Gap)
+
+Bayangkan sistem yang “sempurna tanpa gap”:
+
+Transaction 1 dan Transaction 2 berjalan bersamaan.
+
+- Transaction 1 mendapat ID 5
+- Transaction 2 juga mendapat ID 5 (karena 5 belum di-commit)
+
+Jika keduanya commit:
+
+❌ Terjadi duplicate key
+❌ Salah satu pasti gagal saat commit
+
+Ini menciptakan race condition yang sangat berbahaya.
+
+Jika Sequence Tidak Transaction-Aware (Dengan Gap)
+
+Yang terjadi di PostgreSQL:
+
+- Transaction 1 mendapat ID 5
+- Transaction 2 mendapat ID 6
+- Transaction 1 rollback
+- Transaction 2 commit
+
+Hasilnya:
+
+- ID 5 hilang
+- ID 6 tersimpan
+- Tidak ada duplicate
+- Tidak ada konflik
+
+Lebih aman, lebih sederhana, dan lebih scalable.
+
+#### Skenario 2: Concurrent Transactions
+
+Dalam sistem produksi nyata, sering terjadi banyak transaksi berjalan bersamaan.
+
+Sequence sengaja dibuat:
+
+- Tidak di-rollback
+- Tidak perlu locking kompleks
+- Tidak perlu koordinasi berat antar transaksi
+
+Keuntungannya:
+
+1. Mencegah duplicate key error
+2. Menghindari bottleneck akibat locking
+3. Meningkatkan performa di sistem high-concurrency
+
+Jadi gap bukan bug, tapi trade-off yang cerdas demi konsistensi dan performa.
+
+#### Kapan Gap Menjadi Masalah?
+
+Dalam kebanyakan sistem, gap sama sekali tidak masalah.
+
+Primary key memang tidak dirancang untuk:
+
+- Menjadi nomor urut bisnis
+- Menjadi invoice number
+- Menjadi nomor dokumen resmi
+
+Namun ada kasus khusus, misalnya:
+
+- Nomor invoice yang secara hukum tidak boleh ada gap
+- Nomor tiket resmi yang harus strictly incrementing
+- Nomor dokumen pajak
+
+Dalam kasus seperti itu:
 
 ```sql
 -- Jika business requirement HARUS strictly incrementing (tanpa gap)
--- Contoh: invoice number yang tidak boleh ada gap
--- Solusi: Harus implementasi custom logic, serial/sequence tidak cocok
+-- Serial/sequence tidak cocok
 ```
+
+Solusinya bukan memaksa sequence tanpa gap, tetapi:
+
+- Implementasi custom logic
+- Bisa menggunakan locking manual
+- Atau tabel khusus untuk mengelola nomor dokumen
+
+Namun perlu dipahami: solusi seperti itu biasanya lebih kompleks dan berpotensi mengurangi performa.
+
+#### Kesimpulan Penting
+
+Gap dalam sequence adalah:
+
+- Normal
+- Aman
+- Disengaja
+- Bagian dari desain concurrency PostgreSQL
+
+Jika melihat ID meloncat, jangan panik. Itu bukan error.
+
+Yang penting adalah:
+
+- Tidak ada duplicate
+- Konsistensi tetap terjaga
+- Sistem tetap scalable
+
+Primary key bukan nomor bisnis. Ia hanyalah identitas unik teknis. Dan untuk tujuan itu, gap bukanlah masalah.
 
 ### f. Serial sebagai Primary Key: Setup yang Benar
 
-**Jika tetap menggunakan serial (legacy code, dll):**
+#### Jika Tetap Menggunakan Serial
+
+Dalam banyak codebase lama (terutama sebelum PostgreSQL 10), penggunaan `SERIAL` atau `BIGSERIAL` untuk primary key sangat umum. Jika kamu masih menggunakannya, itu tidak masalah — yang penting setup-nya benar.
+
+Contoh deklarasi yang benar:
 
 ```sql
--- ✅ BENAR: Deklarasi sebagai PRIMARY KEY
 CREATE TABLE users (
     id BIGSERIAL PRIMARY KEY,
     name TEXT
 );
 ```
 
-**Mengapa PRIMARY KEY penting:**
+Di sini ada dua hal penting:
 
-1. Sequence sendiri tidak mencegah duplicate
-2. User bisa manual insert value yang sama
-3. User bisa reset sequence
-4. PRIMARY KEY constraint memastikan uniqueness
+1. `BIGSERIAL` → membuat kolom auto-increment berbasis `BIGINT`
+2. `PRIMARY KEY` → menambahkan constraint uniqueness + index otomatis
 
-**Contoh masalah tanpa PRIMARY KEY:**
+Kombinasi inilah yang membuat kolom `id` benar-benar aman sebagai identitas unik.
+
+#### Mengapa PRIMARY KEY Itu Wajib?
+
+Banyak orang salah paham dan berpikir:
+
+“Kalau sudah pakai serial, pasti tidak mungkin duplicate.”
+
+Itu tidak sepenuhnya benar.
+
+Sequence hanya bertugas menghasilkan angka berurutan. Ia **tidak menjamin** bahwa angka tersebut unik di dalam tabel.
+
+Ada beberapa skenario yang bisa menyebabkan masalah jika tidak ada `PRIMARY KEY`.
+
+##### 1. Sequence Tidak Mencegah Duplicate
+
+Sequence hanya memberikan angka baru saat `nextval()` dipanggil. Tapi database tidak otomatis memeriksa apakah angka yang dimasukkan ke kolom sudah ada atau belum — kecuali ada constraint.
+
+Tanpa `PRIMARY KEY` atau `UNIQUE`, duplicate sangat mungkin terjadi.
+
+##### 2. User Bisa Manual Insert Nilai Sendiri
+
+Misalnya:
 
 ```sql
--- Tanpa PRIMARY KEY constraint
+INSERT INTO users (id, name) VALUES (5, 'Alice');
+```
+
+Jika tidak ada constraint, database tidak akan menolak angka tersebut, meskipun 5 sudah pernah dipakai.
+
+##### 3. Sequence Bisa Di-reset
+
+Sequence adalah objek terpisah. Seseorang bisa saja menjalankan:
+
+```sql
+ALTER SEQUENCE users_id_seq RESTART WITH 1;
+```
+
+Ini sangat berbahaya jika tidak hati-hati, karena angka yang sudah pernah digunakan bisa terulang kembali.
+
+Tanpa `PRIMARY KEY`, database tidak akan menghentikan duplicate tersebut.
+
+#### Contoh Masalah Tanpa PRIMARY KEY
+
+Perhatikan contoh berikut:
+
+```sql
 CREATE TABLE users (
     id BIGSERIAL,
     name TEXT
 );
+```
 
--- Sequence di-reset (jangan lakukan ini!)
+Di sini kita menggunakan `BIGSERIAL`, tapi **tidak ada PRIMARY KEY**.
+
+Sekarang terjadi reset sequence:
+
+```sql
 ALTER SEQUENCE users_id_seq RESTART WITH 1;
+```
 
--- Manual insert
+Lalu kita lakukan manual insert:
+
+```sql
 INSERT INTO users (id, name) VALUES (5, 'Alice');
 INSERT INTO users (id, name) VALUES (5, 'Bob');  -- ✅ Sukses (SEHARUSNYA ERROR!)
 ```
 
-**Rekomendasi untuk codebase lama:**
+Karena tidak ada constraint `PRIMARY KEY` atau `UNIQUE`, database akan mengizinkan dua baris dengan `id = 5`.
 
-- Jika sudah pakai serial dari PostgreSQL 9: **tidak perlu migrasi**
-- Tetap aman selama dideklarasi sebagai PRIMARY KEY
-- Untuk table baru: gunakan identity columns (video terpisah)
+Ini jelas melanggar konsep primary key sebagai identitas unik.
+
+#### Apa yang Dilakukan PRIMARY KEY?
+
+Ketika kita menambahkan:
+
+```sql
+id BIGSERIAL PRIMARY KEY
+```
+
+PostgreSQL akan:
+
+1. Menambahkan constraint `NOT NULL`
+2. Menambahkan constraint `UNIQUE`
+3. Membuat index unik otomatis
+
+Jika kita mencoba:
+
+```sql
+INSERT INTO users (id, name) VALUES (5, 'Alice');
+INSERT INTO users (id, name) VALUES (5, 'Bob');
+```
+
+Baris kedua akan menghasilkan error duplicate key.
+
+Dan itulah yang kita inginkan.
+
+#### Rekomendasi untuk Codebase Lama
+
+Jika kamu sudah menggunakan `SERIAL` atau `BIGSERIAL` sejak PostgreSQL 9:
+
+- Tidak perlu panik
+- Tidak wajib migrasi
+- Tetap aman selama kolom tersebut dideklarasikan sebagai `PRIMARY KEY`
+
+Yang penting adalah constraint-nya, bukan sekadar tipe auto-increment-nya.
+
+Untuk tabel baru di PostgreSQL 10+, memang lebih disarankan menggunakan identity column. Namun dalam konteks legacy system, `BIGSERIAL PRIMARY KEY` masih sepenuhnya valid dan aman.
+
+Intinya sederhana:
+
+Serial hanya menghasilkan angka.
+Primary key-lah yang menjamin keunikan.
+
+Keduanya harus bekerja bersama untuk membuat identitas yang benar-benar aman di dalam database.
 
 ### g. Use Case Lain: Order Number Generator
 
-Serial tidak hanya untuk primary key - bisa untuk kolom lain yang butuh auto-increment.
+#### Serial Tidak Hanya untuk Primary Key
 
-**Contoh: Sistem order number:**
+Selama ini kita sering melihat `SERIAL` atau `BIGSERIAL` digunakan untuk primary key. Tapi sebenarnya, sequence bisa digunakan untuk kebutuhan lain yang memerlukan angka auto-increment.
+
+Salah satu contoh yang sangat umum di dunia nyata adalah **order number** pada sistem e-commerce atau sistem pemesanan.
+
+Order number biasanya:
+
+- Bertambah otomatis
+- Unik
+- Ditampilkan ke customer
+- Berbeda dari internal ID sistem
+
+Mari kita lihat contoh konkretnya.
+
+#### Contoh: Sistem Order dengan Kolom Terpisah
 
 ```sql
 CREATE TABLE orders (
     id BIGSERIAL PRIMARY KEY,           -- Primary key internal
-    order_number SERIAL,                 -- Order number untuk customer
+    order_number SERIAL,                -- Nomor order untuk customer
     customer_name TEXT,
     total NUMERIC(10,2)
 );
 ```
 
-**Insert tanpa specify ID atau order_number:**
+Di sini kita punya dua kolom auto-increment:
+
+1. `id` → Digunakan sebagai primary key internal sistem
+2. `order_number` → Digunakan sebagai nomor order yang bisa ditampilkan ke customer
+
+Sekarang kita lakukan insert tanpa menyebutkan `id` atau `order_number`:
 
 ```sql
 INSERT INTO orders (customer_name, total)
 VALUES ('Alice', 150.00);
-
--- Hasil:
--- id: 1 (auto)
--- order_number: 1 (auto)
--- customer_name: Alice
--- total: 150.00
 ```
 
-**Keuntungan punya kolom terpisah:**
+Hasilnya kira-kira seperti ini:
 
-- **Internal ID**: Bisa menggunakan UUID, big integer, atau format lain
-- **Order Number**: Bisa custom format yang user-friendly untuk customer
-- **Fleksibilitas**: Bisa set starting number sequence berbeda
+- id: 1
+- order_number: 1
+- customer_name: Alice
+- total: 150.00
 
-**Custom starting number:**
+Kedua kolom tersebut otomatis mendapatkan nilai dari sequence masing-masing.
+
+#### Mengapa Memisahkan Internal ID dan Order Number?
+
+Ini praktik yang sangat baik dalam sistem production.
+
+Beberapa alasannya:
+
+##### 1. Internal ID Tidak Perlu Ditampilkan
+
+`id` biasanya hanya digunakan untuk:
+
+- Relasi antar tabel
+- Foreign key
+- Join query
+- Identitas internal sistem
+
+Kita bebas menggunakan:
+
+- `BIGSERIAL`
+- `UUID`
+- Kombinasi custom lainnya
+
+Customer tidak perlu tahu internal ID sistem.
+
+##### 2. Order Number Bisa Dibuat User-Friendly
+
+Order number sering kali:
+
+- Harus mudah dibaca
+- Punya format tertentu
+- Kadang mengandung prefix seperti `ORD-`, `INV-`, dll.
+
+Dengan memisahkannya dari primary key, kita mendapatkan fleksibilitas penuh.
+
+##### 3. Bisa Atur Starting Number
+
+Kadang secara bisnis, kita tidak ingin order dimulai dari 1.
+
+Misalnya ingin terlihat lebih profesional dengan mulai dari 1000.
+
+Kita bisa melakukan:
 
 ```sql
--- Sequence bisa dimulai dari angka tertentu
--- Contoh: order number mulai dari 1000
 ALTER SEQUENCE orders_order_number_seq RESTART WITH 1000;
-
--- Order berikutnya akan dapat order_number: 1000, 1001, 1002, ...
 ```
 
-**Alternative dengan generated column:**
+Setelah itu, order berikutnya akan mendapatkan:
+
+- 1000
+- 1001
+- 1002
+- dan seterusnya
+
+Ini memberikan fleksibilitas tanpa mengganggu primary key internal.
+
+#### Alternative: Generated Column
+
+Kadang kita tidak ingin menyimpan order number terpisah dalam bentuk angka murni. Kita ingin langsung membuat format tertentu.
+
+Contohnya:
 
 ```sql
--- Video menyebut generated columns sebagai alternatif yang lebih baik
--- Akan dibahas di video terpisah
 CREATE TABLE orders (
     id BIGSERIAL PRIMARY KEY,
     order_number TEXT GENERATED ALWAYS AS ('ORD-' || id) STORED
 );
 ```
 
+Di sini:
+
+- `id` tetap menjadi sumber angka utama
+- `order_number` otomatis menghasilkan teks seperti:
+  - ORD-1
+  - ORD-2
+  - ORD-3
+
+Kolom ini bersifat `GENERATED ALWAYS`, artinya nilainya dihitung otomatis berdasarkan kolom lain dan disimpan secara fisik (`STORED`).
+
+Keuntungannya:
+
+- Tidak perlu sequence kedua
+- Konsisten dengan primary key
+- Format bisa langsung user-friendly
+
+#### Kapan Menggunakan Pendekatan Terpisah?
+
+Gunakan kolom terpisah jika:
+
+- Order number punya aturan bisnis khusus
+- Perlu reset atau starting number berbeda
+- Ingin fleksibilitas penuh terhadap format
+- Tidak ingin mengikat nomor customer ke internal ID
+
+Gunakan generated column jika:
+
+- Format sederhana
+- Tidak butuh sequence terpisah
+- Hanya ingin menambahkan prefix atau transformasi ringan
+
+#### Kesimpulan
+
+Serial dan sequence bukan hanya untuk primary key.
+
+Mereka sangat berguna untuk:
+
+- Nomor order
+- Nomor invoice
+- Nomor tiket
+- Nomor referensi internal
+
+Dengan memisahkan internal ID dan nomor bisnis, kita mendapatkan fleksibilitas arsitektur yang jauh lebih baik dan sistem yang lebih siap untuk berkembang di masa depan.
+
 ### h. RETURNING Clause: Mendapatkan Auto-Generated Values
 
-**Masalah umum:**
+#### Masalah Umum Setelah INSERT
+
+Ketika kita melakukan `INSERT` ke tabel yang memiliki kolom auto-generated seperti `SERIAL`, `BIGSERIAL`, atau `IDENTITY`, sering kali kita butuh mengetahui nilai yang baru saja dibuat.
+
+Contoh sederhana:
 
 ```sql
--- Insert data
 INSERT INTO orders (customer_name, total)
 VALUES ('Alice', 150.00);
-
--- Harus query lagi untuk dapat ID
-SELECT id, order_number FROM orders
-WHERE customer_name = 'Alice'
-ORDER BY id DESC LIMIT 1;  -- ❌ Tidak reliable jika ada duplicate names
 ```
 
-**Solusi: RETURNING clause**
+Query ini berhasil menyimpan data. Tapi bagaimana cara kita tahu `id` atau `order_number` yang baru saja dibuat?
+
+Pendekatan naïf yang sering dilakukan adalah query ulang:
 
 ```sql
--- ✅ Dapat nilai auto-generated dalam 1 query
+SELECT id, order_number FROM orders
+WHERE customer_name = 'Alice'
+ORDER BY id DESC LIMIT 1;
+```
+
+Sekilas terlihat masuk akal. Tapi pendekatan ini bermasalah.
+
+Masalahnya:
+
+- Nama bisa duplicate
+- Bisa ada transaksi paralel
+- Bisa saja ada dua “Alice”
+- Urutan ID belum tentu mencerminkan logika bisnis yang kita harapkan
+
+Dengan kata lain, cara ini **tidak reliable**.
+
+#### Solusi yang Benar: RETURNING Clause
+
+PostgreSQL menyediakan solusi elegan: `RETURNING`.
+
+Kita bisa langsung meminta database mengembalikan nilai yang baru saja di-generate, dalam query yang sama.
+
+Contohnya:
+
+```sql
 INSERT INTO orders (customer_name, total)
 VALUES ('Alice', 150.00)
 RETURNING id, order_number;
-
--- Output:
--- id | order_number
------------------
---  1 |      1001
 ```
 
-**Kemampuan RETURNING:**
+Hasilnya langsung seperti ini:
 
-**1. Return kolom spesifik:**
+```
+ id | order_number
+----+-------------
+  1 |     1001
+```
+
+Artinya:
+
+- Data tersimpan
+- Nilai auto-generated langsung dikembalikan
+- Tidak perlu query tambahan
+
+Semua terjadi dalam satu round-trip ke database.
+
+#### Kemampuan RETURNING
+
+RETURNING sangat fleksibel. Kita bisa memilih apa yang ingin dikembalikan.
+
+##### 1. Mengembalikan Kolom Spesifik
 
 ```sql
 INSERT INTO users (name, email)
 VALUES ('Bob', 'bob@example.com')
 RETURNING id;
--- Hanya dapat ID
 ```
 
-**2. Return beberapa kolom:**
+Di sini kita hanya meminta `id`. Ini cocok jika aplikasi hanya butuh primary key untuk langkah berikutnya.
+
+##### 2. Mengembalikan Beberapa Kolom
 
 ```sql
 INSERT INTO orders (customer_name, total)
 VALUES ('Charlie', 200.00)
 RETURNING id, order_number;
--- Dapat ID dan order number
 ```
 
-**3. Return seluruh row:**
+Cocok jika kita butuh:
+
+- ID internal
+- Nomor order untuk ditampilkan ke user
+
+##### 3. Mengembalikan Seluruh Row
 
 ```sql
 INSERT INTO users (name, email)
 VALUES ('Diana', 'diana@example.com')
 RETURNING *;
--- Dapat semua kolom termasuk yang auto-generated
 ```
 
-**Keuntungan:**
+Dengan `RETURNING *`, PostgreSQL akan mengembalikan semua kolom, termasuk:
 
-- **Efisiensi**: Satu round-trip ke database, bukan dua
-- **Reliability**: Tidak perlu query lagi dengan WHERE yang mungkin tidak unique
-- **Convenience**: Langsung dapat data yang dibutuhkan
+- Auto-generated ID
+- Default value
+- Timestamp seperti `created_at` jika ada
 
-**Use case dalam aplikasi:**
+Ini sangat praktis ketika kita ingin langsung menampilkan data hasil insert tanpa query tambahan.
+
+#### Mengapa RETURNING Sangat Penting?
+
+Ada tiga keuntungan utama.
+
+##### 1. Efisiensi
+
+Tanpa RETURNING:
+
+- INSERT (1 query)
+- SELECT (1 query lagi)
+
+Dengan RETURNING:
+
+- Hanya 1 query
+
+Dalam sistem produksi dengan traffic tinggi, mengurangi round-trip ke database sangat penting untuk performa.
+
+##### 2. Reliability
+
+Tidak perlu:
+
+- WHERE berdasarkan kolom yang belum tentu unik
+- ORDER BY id DESC
+- LIMIT 1
+
+Kita mendapatkan row yang persis baru saja dimasukkan, tanpa ambiguitas.
+
+##### 3. Convenience
+
+Semua nilai langsung tersedia untuk dipakai di aplikasi.
+
+#### Contoh dalam Aplikasi (Pseudo-code JavaScript)
 
 ```javascript
-// Contoh pseudo-code
 const result = await db.query(
   `
     INSERT INTO orders (customer_name, total)
     VALUES ($1, $2)
     RETURNING id, order_number
-`,
-  ["Alice", 150.0]
+  `,
+  ["Alice", 150.0],
 );
 
 // Langsung dapat ID dan order_number
 console.log(result.rows[0].id); // 1
 console.log(result.rows[0].order_number); // 1001
 ```
+
+Di sini yang terjadi:
+
+1. Query dijalankan.
+2. Database menyimpan data.
+3. Database langsung mengembalikan nilai yang dihasilkan.
+4. Aplikasi langsung bisa menggunakan nilai tersebut.
+
+Tidak ada query tambahan. Tidak ada risiko salah ambil data.
+
+#### Kesimpulan
+
+RETURNING adalah fitur yang sangat penting ketika bekerja dengan:
+
+- SERIAL
+- BIGSERIAL
+- IDENTITY
+- Default value
+- Trigger-generated value
+
+Daripada melakukan INSERT lalu SELECT lagi, gunakan RETURNING.
+
+Lebih cepat.
+Lebih aman.
+Lebih bersih secara arsitektur.
 
 ## 3. Hubungan Antar Konsep
 

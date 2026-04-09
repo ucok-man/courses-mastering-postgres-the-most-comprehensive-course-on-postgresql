@@ -8,85 +8,211 @@ Video ini membahas beberapa keunikan dari tipe data numerik di PostgreSQL, khusu
 
 ### a. NaN (Not a Number)
 
-NaN adalah singkatan dari "Not a Number" yang merepresentasikan nilai yang bukan merupakan angka valid.
+NaN adalah singkatan dari _Not a Number_, yaitu sebuah nilai khusus yang digunakan untuk merepresentasikan hasil perhitungan numerik yang **tidak dapat dinyatakan sebagai angka yang valid**. Nilai ini bukan nol, bukan kosong, dan juga bukan error — melainkan sebuah _state_ numerik yang secara eksplisit menyatakan “ini bukan angka”.
 
-**Karakteristik NaN:**
+Dalam PostgreSQL, NaN sering muncul ketika sistem perlu menyimpan hasil perhitungan yang secara matematis tidak terdefinisi atau tidak bermakna sebagai angka biasa.
 
-- **Tipe data yang mendukung**: Hanya `NUMERIC` dan `FLOAT` yang memiliki NaN
-- **Tipe data yang tidak mendukung**: `INTEGER` tidak memiliki NaN
-- **Kesetaraan**: Di PostgreSQL, semua NaN dianggap sama dengan NaN lainnya (ini adalah perilaku spesifik PostgreSQL)
-- **Dalam sorting**: NaN dianggap sebagai nilai yang sangat besar, lebih besar dari angka manapun
+#### Karakteristik NaN
 
-**Contoh:**
+Ada beberapa sifat penting dari NaN yang perlu dipahami agar tidak keliru saat menggunakannya dalam query atau logika aplikasi.
+
+#### Tipe data yang mendukung NaN
+
+Tidak semua tipe data numerik mendukung NaN. Di PostgreSQL:
+
+- **NUMERIC** dan **FLOAT** mendukung nilai NaN
+- **INTEGER** dan turunannya **tidak mendukung NaN**
+
+Artinya, jika Anda bekerja dengan kolom bertipe `INTEGER`, Anda tidak akan pernah menemukan NaN di sana. Jika membutuhkan representasi “bukan angka”, maka tipe `NUMERIC` atau `FLOAT` adalah pilihan yang tepat.
+
+#### Perilaku kesetaraan (equality)
+
+Secara umum, dalam standar IEEE dan banyak bahasa pemrograman, NaN **tidak pernah sama dengan NaN**. Namun PostgreSQL memiliki perilaku khusus:
+
+- **Semua NaN dianggap sama dengan NaN lainnya**
+
+Ini berarti perbandingan `NaN = NaN` akan menghasilkan `TRUE` di PostgreSQL, berbeda dengan banyak sistem lain. Perilaku ini memudahkan operasi seperti `GROUP BY`, `DISTINCT`, dan perbandingan langsung antar nilai NaN.
+
+#### Perilaku dalam sorting
+
+Saat digunakan dalam operasi pengurutan (`ORDER BY`), PostgreSQL memperlakukan NaN sebagai:
+
+- **Nilai yang sangat besar**
+- **Lebih besar dari angka numerik mana pun**
+
+Konsekuensinya, jika Anda mengurutkan data secara ascending, nilai NaN akan muncul di bagian akhir hasil query.
+
+#### Contoh penggunaan NaN
+
+Berikut beberapa contoh konkret untuk memahami bagaimana NaN bekerja di PostgreSQL.
 
 ```sql
 -- Membuat nilai NaN
-SELECT 'NaN'::NUMERIC;  -- Menghasilkan NaN
-
--- NaN lebih besar dari angka manapun dalam sorting
-SELECT 'NaN'::NUMERIC > 999999999::NUMERIC;  -- TRUE
-
--- Operasi dengan NaN
-SELECT 'NaN'::NUMERIC + 1;  -- Menghasilkan NaN
-SELECT POWER('NaN'::NUMERIC, 0);  -- Menghasilkan 1 (karena x^0 = 1)
+SELECT 'NaN'::NUMERIC;
 ```
+
+Query ini secara eksplisit melakukan casting string `'NaN'` ke tipe `NUMERIC`. Hasilnya adalah sebuah nilai NaN, bukan error.
+
+```sql
+-- NaN lebih besar dari angka manapun dalam sorting
+SELECT 'NaN'::NUMERIC > 999999999::NUMERIC;
+```
+
+Hasil dari query ini adalah `TRUE`. Ini menunjukkan bahwa PostgreSQL menganggap NaN lebih besar daripada angka numerik mana pun, bahkan angka yang sangat besar sekalipun.
+
+```sql
+-- Operasi dengan NaN
+SELECT 'NaN'::NUMERIC + 1;
+```
+
+Hasilnya tetap NaN. Sebagian besar operasi aritmatika yang melibatkan NaN akan menghasilkan NaN, karena menambahkan angka ke “bukan angka” tetap tidak menghasilkan angka yang valid.
+
+```sql
+SELECT POWER('NaN'::NUMERIC, 0);
+```
+
+Query ini menghasilkan nilai `1`. Hal ini terjadi karena secara matematis, **setiap nilai berpangkat 0 didefinisikan sebagai 1**, termasuk NaN dalam konteks PostgreSQL. Contoh ini penting karena menunjukkan bahwa ada kasus tertentu di mana operasi dengan NaN tidak menghasilkan NaN, tergantung pada aturan matematis yang diterapkan.
+
+Dengan memahami karakteristik ini, Anda bisa menggunakan NaN secara lebih sadar dan aman, terutama saat menangani data numerik yang berasal dari hasil perhitungan kompleks atau sumber data yang tidak selalu valid.
 
 ### b. Infinity (Nilai Tak Terbatas)
 
-Infinity merepresentasikan nilai yang tidak terbatas (unbounded), baik positif maupun negatif.
+Infinity digunakan untuk merepresentasikan nilai **tak terbatas (unbounded)**, yaitu nilai yang secara konseptual lebih besar atau lebih kecil dari angka mana pun yang bisa direpresentasikan secara normal. Di PostgreSQL, infinity tersedia dalam dua bentuk: **positif (infinity)** dan **negatif (-infinity)**, dan keduanya diperlakukan sebagai nilai numerik khusus, bukan sebagai error.
 
-**Karakteristik Infinity:**
+Nilai ini sangat berguna ketika Anda perlu menandai batas atas atau batas bawah yang “tidak ada akhirnya”, misalnya dalam rentang waktu, perhitungan matematis ekstrem, atau representasi limit.
 
-- **Tipe data yang mendukung**:
-  - `NUMERIC` tanpa precision dan scale (open-ended numeric)
-  - `FLOAT`
-- **Tipe data yang tidak mendukung**:
-  - `INTEGER` (karena integer secara definisi memiliki batas)
-  - `NUMERIC` dengan range yang ditentukan (closed numeric)
-- **Varian**: Ada `infinity` dan `-infinity` (negative infinity)
-- **Kesetaraan**: Semua infinity sama dengan infinity lainnya
+#### Tipe data yang mendukung Infinity
 
-**Contoh:**
+Tidak semua tipe data numerik dapat menyimpan infinity. PostgreSQL membedakan dukungan ini secara cukup ketat.
+
+- **NUMERIC tanpa precision dan scale** (sering disebut _open-ended numeric_) mendukung infinity
+  Artinya kolom `NUMERIC` yang tidak didefinisikan batas digitnya dapat menyimpan nilai tak terbatas.
+- **FLOAT** juga mendukung infinity, mengikuti standar floating-point.
+
+Sebaliknya, ada tipe data yang secara definisi tidak bisa menyimpan infinity.
+
+- **INTEGER** tidak mendukung infinity karena integer selalu memiliki batas minimum dan maksimum yang jelas.
+- **NUMERIC dengan precision dan scale tertentu** (_closed numeric_) juga tidak mendukung infinity, karena ruang nilainya dibatasi sejak awal.
+
+Memahami perbedaan ini penting agar tidak terjadi error saat mendesain skema tabel atau melakukan casting nilai.
+
+#### Varian infinity
+
+Infinity hadir dalam dua varian yang saling berlawanan:
+
+- `infinity` untuk nilai tak terbatas positif
+- `-infinity` untuk nilai tak terbatas negatif
+
+Keduanya adalah nilai yang valid dan bisa digunakan dalam operasi perbandingan maupun aritmatika, selama tipe datanya mendukung.
+
+#### Perilaku kesetaraan
+
+Dalam PostgreSQL:
+
+- Semua nilai `infinity` dianggap **sama dengan infinity lainnya**
+- Semua nilai `-infinity` juga dianggap **sama dengan -infinity lainnya**
+
+Namun tentu saja, `infinity` dan `-infinity` **tidak sama** satu sama lain. Perilaku ini membuat operasi seperti perbandingan, `GROUP BY`, atau pengecekan nilai menjadi lebih konsisten dan mudah diprediksi.
+
+#### Contoh penggunaan Infinity
+
+Berikut beberapa contoh untuk melihat bagaimana infinity bekerja secara praktis.
 
 ```sql
 -- Membuat nilai infinity
 SELECT 'infinity'::NUMERIC;
 SELECT '-infinity'::NUMERIC;
-
--- Operasi matematika dengan infinity
-SELECT 'infinity'::NUMERIC + 'infinity'::NUMERIC;  -- infinity
-SELECT 'infinity'::NUMERIC - 'infinity'::NUMERIC;  -- NaN
-SELECT 'infinity'::NUMERIC + 1;  -- infinity
-SELECT 'infinity'::NUMERIC - 1;  -- infinity
 ```
+
+Kedua query ini melakukan casting string ke tipe `NUMERIC`. Hasilnya adalah nilai infinity positif dan negatif tanpa memicu error, selama tipe `NUMERIC` yang digunakan bersifat open-ended.
+
+```sql
+-- Operasi matematika dengan infinity
+SELECT 'infinity'::NUMERIC + 'infinity'::NUMERIC;
+```
+
+Hasilnya adalah `infinity`. Menjumlahkan dua nilai tak terbatas positif tetap menghasilkan nilai tak terbatas.
+
+```sql
+SELECT 'infinity'::NUMERIC - 'infinity'::NUMERIC;
+```
+
+Hasil dari operasi ini adalah `NaN`. Secara matematis, pengurangan antara dua nilai tak terbatas tidak memiliki hasil yang terdefinisi, sehingga PostgreSQL merepresentasikannya sebagai _Not a Number_.
+
+```sql
+SELECT 'infinity'::NUMERIC + 1;
+SELECT 'infinity'::NUMERIC - 1;
+```
+
+Kedua operasi ini tetap menghasilkan `infinity`. Menambahkan atau mengurangi angka berhingga dari nilai tak terbatas tidak mengubah sifat ketakterbatasannya.
+
+Dengan memahami bagaimana infinity bekerja, Anda bisa menggunakannya secara tepat untuk merepresentasikan batas ekstrem tanpa perlu menggunakan nilai “dummy” yang berpotensi menyesatkan, sekaligus menjaga logika perhitungan tetap konsisten dan aman.
 
 ### c. Perilaku dalam Operasi Matematika
 
-Operasi matematika dengan NaN dan Infinity memiliki aturan khusus:
+Ketika NaN dan Infinity terlibat dalam operasi matematika, PostgreSQL tidak memperlakukannya seperti angka biasa. Keduanya mengikuti **aturan khusus** yang dirancang agar hasil perhitungan tetap konsisten secara matematis, meskipun tidak selalu intuitif pada pandangan pertama. Memahami aturan ini sangat penting untuk menghindari hasil query yang mengejutkan atau sulit dilacak.
 
-**Operasi Infinity:**
+#### Operasi yang melibatkan Infinity
+
+Infinity merepresentasikan nilai yang tidak terbatas, sehingga hasil operasinya mengikuti logika “ketakterbatasan” tersebut.
 
 - `infinity + infinity = infinity`
-- `infinity - infinity = NaN` (tidak terdefinisi)
-- `infinity + 1 = infinity`
-- `infinity - 1 = infinity`
+  Menjumlahkan dua nilai tak terbatas positif tetap menghasilkan nilai tak terbatas. Tidak ada angka berhingga yang bisa membatasi hasilnya.
 
-**Operasi NaN:**
+- `infinity - infinity = NaN`
+  Operasi ini menghasilkan NaN karena secara matematis tidak terdefinisi. Kita tidak bisa menentukan hasil pasti dari pengurangan dua nilai yang sama-sama tak terbatas.
+
+- `infinity + 1 = infinity`
+  Menambahkan angka berhingga ke nilai tak terbatas tidak mengubah sifat ketakterbatasannya. Hasilnya tetap infinity.
+
+- `infinity - 1 = infinity`
+  Hal yang sama berlaku saat mengurangi angka berhingga dari infinity. Nilai tersebut masih tetap tak terbatas.
+
+Aturan-aturan ini membantu PostgreSQL menjaga konsistensi logika matematika saat berhadapan dengan nilai ekstrem.
+
+#### Operasi yang melibatkan NaN
+
+NaN melambangkan nilai yang bukan angka valid, sehingga hampir semua operasi yang melibatkannya akan “tercemar” oleh NaN itu sendiri.
 
 - `NaN + angka_apapun = NaN`
-- `NaN ^ 0 = 1` (pengecualian: karena aturan matematika x⁰ = 1)
+  Jika sebuah operasi melibatkan NaN, hasilnya hampir selalu NaN. Ini menandakan bahwa perhitungan tersebut tidak memiliki hasil numerik yang bermakna.
 
-**Contoh:**
+- `NaN ^ 0 = 1`
+  Ini adalah pengecualian penting. Secara matematis, aturan umum menyatakan bahwa **setiap nilai berpangkat nol adalah 1**. PostgreSQL menerapkan aturan ini bahkan ketika basisnya adalah NaN, sehingga hasilnya tetap 1.
+
+Pengecualian ini sering menjadi sumber kebingungan jika tidak dipahami dengan baik.
+
+#### Contoh perilaku dalam query
+
+Contoh berikut menunjukkan langsung bagaimana PostgreSQL menerapkan aturan-aturan tersebut.
 
 ```sql
 -- Infinity
-SELECT 'infinity'::NUMERIC + 'infinity'::NUMERIC;  -- infinity
-SELECT 'infinity'::NUMERIC - 'infinity'::NUMERIC;  -- NaN (filosofis/matematis)
-
--- NaN
-SELECT 'NaN'::NUMERIC + 1;  -- NaN
-SELECT POWER('NaN'::NUMERIC, 0);  -- 1
+SELECT 'infinity'::NUMERIC + 'infinity'::NUMERIC;
 ```
+
+Hasilnya adalah `infinity`, karena penjumlahan dua nilai tak terbatas tetap tak terbatas.
+
+```sql
+SELECT 'infinity'::NUMERIC - 'infinity'::NUMERIC;
+```
+
+Query ini menghasilkan `NaN`, menandakan bahwa operasi tersebut tidak memiliki hasil yang terdefinisi secara matematis.
+
+```sql
+-- NaN
+SELECT 'NaN'::NUMERIC + 1;
+```
+
+Hasilnya adalah `NaN`. Kehadiran NaN dalam operasi membuat seluruh hasil perhitungan menjadi NaN.
+
+```sql
+SELECT POWER('NaN'::NUMERIC, 0);
+```
+
+Hasilnya adalah `1`. Ini menunjukkan pengecualian penting di mana aturan matematika `x⁰ = 1` tetap berlaku, bahkan ketika `x` adalah NaN.
+
+Dengan memahami perilaku ini, Anda dapat menulis query yang lebih aman dan dapat diprediksi, terutama saat menangani data numerik yang berpotensi mengandung nilai ekstrem atau hasil perhitungan yang tidak terdefinisi.
 
 ## 3. Hubungan Antar Konsep
 

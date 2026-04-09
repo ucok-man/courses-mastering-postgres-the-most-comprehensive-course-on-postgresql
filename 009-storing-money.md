@@ -8,447 +8,652 @@ Video ini membahas cara yang **benar dan salah** untuk menyimpan data uang (mone
 
 ### a. Tipe Data MONEY: Kenapa TIDAK Direkomendasikan
 
-PostgreSQL memiliki tipe data `MONEY`, tetapi **sangat tidak disarankan** untuk production use.
+PostgreSQL memang menyediakan tipe data khusus bernama `MONEY`, dan sekilas tipe ini terlihat sangat menarik karena langsung merepresentasikan nilai uang lengkap dengan simbol mata uang. Namun, di balik kemudahan tersebut, ada sejumlah masalah serius yang membuat tipe data ini **sangat tidak disarankan untuk digunakan di lingkungan production**.
 
-**Deklarasi dan penggunaan:**
+#### Deklarasi dan Penggunaan Dasar
+
+Secara sintaks, penggunaan tipe data `MONEY` sangat sederhana. Kita bisa mendeklarasikannya langsung pada kolom tabel seperti contoh berikut:
 
 ```sql
--- Cara deklarasi
 CREATE TABLE money_example (
     item_name TEXT,
     price MONEY
 );
-
--- Insert berbagai format
-INSERT INTO money_example (item_name, price) VALUES
-    ('Laptop', 999.99),           -- Float literal
-    ('Mouse', 25.50),              -- Decimal literal
-    ('Keyboard', 75),              -- Integer literal
-    ('Headphones', '$129.99');     -- Currency-formatted string
-
--- Semua format di atas VALID
-SELECT * FROM money_example;
--- Result:
--- Laptop      | $999.99
--- Mouse       | $25.50
--- Keyboard    | $75.00
--- Headphones  | $129.99
 ```
 
-**Flexibility input:**
+Kolom `price` didefinisikan menggunakan tipe `MONEY`, yang artinya PostgreSQL akan memperlakukan nilai tersebut sebagai nilai moneter.
 
-- ✅ Accept float literals
-- ✅ Accept integer literals
-- ✅ Accept currency-formatted strings (`'$129.99'`)
-- ✅ Automatically format dengan currency symbol
+Selanjutnya, kita bisa memasukkan data dengan berbagai format input:
 
-**Terlihat bagus? WAIT! Ada masalah besar...**
+```sql
+INSERT INTO money_example (item_name, price) VALUES
+    ('Laptop', 999.99),           -- Float literal
+    ('Mouse', 25.50),             -- Decimal literal
+    ('Keyboard', 75),             -- Integer literal
+    ('Headphones', '$129.99');    -- Currency-formatted string
+```
+
+Semua baris di atas **valid** dan akan diterima oleh PostgreSQL tanpa error. Ketika kita melakukan query:
+
+```sql
+SELECT * FROM money_example;
+```
+
+Hasilnya akan terlihat seperti ini:
+
+```text
+Laptop      | $999.99
+Mouse       | $25.50
+Keyboard    | $75.00
+Headphones  | $129.99
+```
+
+Secara visual, ini terlihat sangat rapi dan nyaman dibaca. PostgreSQL otomatis menambahkan simbol mata uang dan memastikan format dua angka desimal.
+
+#### Fleksibilitas Input yang Terlihat Menguntungkan
+
+Tipe data `MONEY` memang unggul dalam hal fleksibilitas input:
+
+- Menerima **float literal**
+- Menerima **integer literal**
+- Menerima **string dengan format mata uang** seperti `'$129.99'`
+- Secara otomatis menampilkan hasil dengan **currency symbol**
+
+Bagi pemula, atau saat melihat contoh ini pertama kali, sangat wajar jika berpikir: “Ini ideal untuk menyimpan harga atau nilai transaksi.”
+
+Namun, justru di sinilah jebakan dimulai.
+
+#### Masalah Besar di Balik Tipe Data MONEY
+
+Walaupun terlihat nyaman, tipe data `MONEY` memiliki sejumlah kelemahan mendasar.
+
+Pertama, `MONEY` **bergantung pada locale** (pengaturan regional). Simbol mata uang, pemisah ribuan, dan pemisah desimal bisa berbeda antara satu sistem dan sistem lain. Artinya, hasil query di server A bisa berbeda tampilannya dengan server B, tergantung konfigurasi locale masing-masing.
+
+Kedua, tipe ini **tidak portable**. Jika suatu saat data perlu dipindahkan ke database lain, atau bahkan ke instance PostgreSQL dengan konfigurasi berbeda, Anda bisa menghadapi masalah parsing dan konversi data. Hal ini sangat berisiko untuk sistem yang skalanya berkembang.
+
+Ketiga, `MONEY` **tidak transparan untuk perhitungan numerik**. Operasi matematika pada `MONEY` sering kali membutuhkan casting tambahan, dan perilakunya tidak sejelas tipe numerik seperti `NUMERIC` atau `DECIMAL`. Ini membuat query menjadi lebih rumit dan rawan kesalahan.
+
+Keempat, tipe ini **kurang fleksibel untuk multi-currency**. Jika aplikasi Anda suatu saat perlu menangani lebih dari satu mata uang (misalnya USD, EUR, IDR), `MONEY` justru menjadi penghambat, karena simbol mata uang melekat langsung pada nilai, bukan sebagai data terpisah.
+
+Karena alasan-alasan inilah, meskipun `MONEY` tampak “siap pakai”, praktik terbaik di dunia nyata justru **menghindarinya sama sekali**. Untuk data finansial yang akurat, konsisten, dan aman dalam jangka panjang, tipe seperti `NUMERIC(precision, scale)` jauh lebih direkomendasikan.
 
 ### b. Masalah #1: Loss of Precision
 
-**Problem:**
-Tipe `MONEY` **hanya mendukung 2 decimal places**.
+Salah satu kelemahan paling mendasar dari tipe data `MONEY` adalah keterbatasannya dalam hal presisi. Secara default, `MONEY` **hanya mendukung dua angka di belakang koma (2 decimal places)**. Batasan ini sering kali tidak terasa di awal, tetapi bisa menimbulkan masalah serius ketika aplikasi mulai menangani perhitungan keuangan yang lebih kompleks.
 
-**Demonstrasi:**
+#### Masalah Utama: Pembulatan Otomatis
+
+Mari kita lihat bagaimana PostgreSQL memperlakukan nilai dengan jumlah desimal yang berbeda saat dikonversi ke tipe `MONEY`.
 
 ```sql
--- Test precision loss
 SELECT 1.99::MONEY;
 -- Result: $1.99 ✅
+```
 
+Nilai dengan dua desimal berjalan sempurna.
+
+```sql
 SELECT 99.99::MONEY;
 -- Result: $99.99 ✅
+```
 
+Masih aman, karena sesuai dengan batas presisi `MONEY`.
+
+Namun, perhatikan apa yang terjadi ketika kita memasukkan lebih dari dua angka desimal:
+
+```sql
 SELECT 99.876::MONEY;
--- Result: $99.88 ⚠️ (rounded, kehilangan digit ke-3!)
+-- Result: $99.88 ⚠️
 ```
 
-**Implikasi:**
+Angka `99.876` **dibulatkan otomatis** menjadi `99.88`. Digit ketiga di belakang koma hilang tanpa peringatan eksplisit. Inilah yang disebut _loss of precision_ — data berubah nilainya secara diam-diam.
 
-**✅ OK untuk USD standard (2 decimal places):**
+#### Implikasi pada Kasus Nyata
+
+Efek dari pembatasan ini sangat bergantung pada konteks penggunaan.
+
+#### Kasus yang Masih Aman: Mata Uang Standar (2 Desimal)
+
+Untuk mata uang seperti USD yang memang secara umum hanya menggunakan dua angka desimal (cents), `MONEY` terlihat aman.
 
 ```sql
--- US Dollars dengan cents standar
 SELECT 100.78::MONEY;
--- Result: $100.78 (perfect)
+-- Result: $100.78
 ```
 
-**❌ MASALAH untuk fractional cents:**
+Dalam skenario ini, tidak ada informasi yang hilang karena format datanya sesuai dengan batasan `MONEY`.
+
+#### Masalah pada Fractional Cents
+
+Masalah mulai muncul ketika aplikasi membutuhkan presisi lebih tinggi, misalnya untuk perhitungan pajak, bunga, atau pembagian nilai.
 
 ```sql
--- Jika butuh fractional cents (misal: tax calculations)
 SELECT 100.789::MONEY;
--- Result: $100.79 (kehilangan precision!)
-
--- Financial calculations yang precise
-SELECT (100.33 / 3)::MONEY;
--- Result: $33.44 (harusnya $33.443333...)
+-- Result: $100.79
 ```
 
-**❌ MASALAH BESAR untuk cryptocurrency:**
+Nilai `100.789` seharusnya disimpan apa adanya, tetapi malah dibulatkan menjadi `100.79`. Sekilas terlihat sepele, tetapi akumulasi pembulatan seperti ini dapat menghasilkan selisih yang signifikan dalam laporan keuangan.
+
+Contoh lain yang lebih berbahaya adalah perhitungan matematis:
 
 ```sql
--- Bitcoin atau crypto dengan banyak decimal places
-SELECT 0.00012345::MONEY;
--- Result: $0.00 (DISASTER! Kehilangan hampir semua value!)
-
--- Ethereum (18 decimal places) - completely unusable
+SELECT (100.33 / 3)::MONEY;
+-- Result: $33.44
 ```
 
-**Kesimpulan:**
+Secara matematis, hasil yang benar adalah `33.443333...`. Namun, karena dibatasi dua desimal, nilainya dibulatkan menjadi `33.44`. Dalam sistem finansial, kesalahan kecil seperti ini bisa berdampak besar jika terjadi berulang kali.
 
-> Jika aplikasi Anda **hanya** berurusan dengan US Dollars atau currency dengan 2 decimal places standard, dan **tidak pernah** butuh fractional cents, MUNGKIN `MONEY` OK. **Tapi kenapa ambil risk?**
+#### Masalah Besar pada Cryptocurrency
+
+Untuk aset digital seperti cryptocurrency, tipe `MONEY` praktis tidak bisa digunakan sama sekali.
+
+```sql
+SELECT 0.00012345::MONEY;
+-- Result: $0.00
+```
+
+Hampir seluruh nilai hilang karena semua angka penting berada di luar dua desimal yang didukung. Ini bukan sekadar pembulatan kecil, melainkan **kehilangan nilai yang masif**.
+
+Cryptocurrency seperti Ethereum bahkan menggunakan hingga 18 decimal places, yang membuat tipe `MONEY` sepenuhnya tidak relevan untuk skenario ini.
+
+#### Kesimpulan
+
+Jika aplikasi Anda **hanya** menangani mata uang dengan standar dua desimal dan **tidak pernah** membutuhkan fractional cents, maka secara teknis `MONEY` mungkin masih bisa digunakan. Namun, mengingat risiko kehilangan presisi yang terjadi secara diam-diam, pilihan ini jarang sepadan. Dalam praktik profesional, jauh lebih aman menggunakan tipe data numerik dengan presisi eksplisit agar tidak ada nilai yang “menghilang” tanpa disadari.
 
 ### c. Masalah #2: Locale Dependency (LC_MONETARY)
 
-**Problem yang SANGAT SERIUS:**
-Currency symbol dan formatting bergantung pada `lc_monetary` setting, yang bisa **berubah** dan menyebabkan **data terlihat salah**.
+Masalah kedua ini jauh lebih berbahaya dibanding sekadar kehilangan presisi, karena menyentuh **cara data ditampilkan** dan **bagaimana manusia menafsirkan nilainya**. Tipe data `MONEY` sangat bergantung pada pengaturan locale, khususnya `lc_monetary`. Jika setting ini berubah, **representasi nilai uang bisa berubah drastis**, meskipun nilai aslinya sama sekali tidak berubah.
 
-**Demonstrasi masalah:**
+#### Akar Masalah: Formatting Bergantung Locale
 
-**Initial setup (US Dollar):**
+PostgreSQL tidak menyimpan informasi mata uang di dalam tipe `MONEY`. Yang disimpan hanyalah **nilai numerik internal**, sedangkan simbol mata uang, pemisah desimal, dan format tampilannya sepenuhnya ditentukan oleh `lc_monetary`.
+
+Mari kita lihat bagaimana masalah ini muncul dalam praktik.
+
+#### Kondisi Awal: Locale US Dollar
+
+Pertama, kita cek locale yang sedang aktif:
 
 ```sql
--- Check current locale
 SHOW lc_monetary;
 -- Result: en_US.UTF-8
-
--- Display data
-SELECT * FROM money_example;
--- Result:
--- Laptop      | $999.99  (US Dollar symbol)
--- Mouse       | $25.50
--- Keyboard    | $75.00
 ```
 
-**Setelah locale berubah:**
+Dengan locale Amerika Serikat, ketika kita menampilkan data:
 
 ```sql
--- Change locale to Great British Pound
+SELECT * FROM money_example;
+```
+
+Hasilnya terlihat wajar dan “benar”:
+
+```text
+Laptop      | $999.99
+Mouse       | $25.50
+Keyboard    | $75.00
+```
+
+Simbol dolar (`$`) sesuai dengan asumsi bahwa data tersebut memang disimpan dalam USD.
+
+#### Locale Berubah, Data “Ikut Berubah”
+
+Sekarang bayangkan locale sistem berubah, misalnya ke Inggris:
+
+```sql
 SET lc_monetary = 'en_GB.UTF-8';
-
--- Display data yang SAMA
-SELECT * FROM money_example;
--- Result:
--- Laptop      | £999.99  (Sekarang Pound symbol!)
--- Mouse       | £25.50
--- Keyboard    | £75.00
 ```
 
-**MASALAH BESAR:**
-
-```
-Data SEBENARNYA: $999.99 USD (sekitar £790 GBP)
-Data TERLIHAT:   £999.99 GBP (terlihat lebih mahal!)
-
-❌ TIDAK ADA currency conversion yang terjadi!
-❌ Hanya SYMBOL yang berubah!
-❌ Representasi data menjadi TOTALLY WRONG!
-```
-
-**Ilustrasi visual:**
-
-```
-Stored value (internal): 999.99
-
-┌─────────────────┬──────────────────┐
-│ lc_monetary     │ Display          │
-├─────────────────┼──────────────────┤
-│ en_US.UTF-8     │ $999.99          │
-│ en_GB.UTF-8     │ £999.99          │
-│ de_DE.UTF-8     │ 999,99 €         │
-│ ja_JP.UTF-8     │ ¥999.99          │
-└─────────────────┴──────────────────┘
-
-Value TIDAK BERUBAH, hanya PRESENTASI!
-Super confusing dan misleading!
-```
-
-**Skenario disaster:**
+Tanpa mengubah satu pun data di tabel, kita jalankan query yang sama:
 
 ```sql
--- Scenario: Multi-tenant application
--- Tenant A: US company (stores in USD)
--- Tenant B: UK company (changes lc_monetary)
+SELECT * FROM money_example;
+```
 
--- Tenant A stores data
+Hasilnya:
+
+```text
+Laptop      | £999.99
+Mouse       | £25.50
+Keyboard    | £75.00
+```
+
+Nilai yang sama kini ditampilkan dengan simbol Pound Sterling (`£`).
+
+#### Kenapa Ini Masalah Besar?
+
+Di sinilah letak bahayanya:
+
+- Nilai **sebenarnya** di database adalah `$999.99 USD`
+- Nilai yang **terlihat** oleh user adalah `£999.99 GBP`
+
+Tidak ada konversi mata uang sama sekali. PostgreSQL **hanya mengganti simbol**, bukan mengonversi nilainya.
+
+Secara kasar:
+
+- `$999.99 USD` ≈ `£790 GBP`
+- Tapi yang ditampilkan: `£999.99 GBP`
+
+Artinya, data terlihat **jauh lebih mahal** dari nilai sebenarnya. Ini bukan sekadar masalah kosmetik, tetapi kesalahan representasi data yang bisa menyesatkan pengambilan keputusan.
+
+#### Ilustrasi Cara Kerja Internal
+
+Secara internal, PostgreSQL hanya menyimpan satu angka:
+
+```text
+Stored value (internal): 999.99
+```
+
+Cara angka ini ditampilkan sepenuhnya bergantung pada locale:
+
+```text
+lc_monetary     →  Display
+en_US.UTF-8     →  $999.99
+en_GB.UTF-8     →  £999.99
+de_DE.UTF-8     →  999,99 €
+ja_JP.UTF-8     →  ¥999.99
+```
+
+Nilainya **tidak pernah berubah**, yang berubah hanyalah cara menampilkannya. Inilah yang membuat tipe `MONEY` sangat membingungkan dan berpotensi menyesatkan.
+
+#### Skenario Nyata: Multi-Tenant Disaster
+
+Bayangkan sebuah aplikasi multi-tenant:
+
+- Tenant A adalah perusahaan di US dan menyimpan data dalam USD
+- Tenant B adalah perusahaan di UK dan mengubah `lc_monetary`
+
+Tenant A menyimpan invoice:
+
+```sql
 SET lc_monetary = 'en_US.UTF-8';
 INSERT INTO invoices VALUES ('Invoice-001', 1000.00::MONEY);
--- Internal: 1000.00, Display: $1000.00
-
--- Later, Tenant B (or system restart with different locale)
-SET lc_monetary = 'en_GB.UTF-8';
-SELECT * FROM invoices WHERE invoice_id = 'Invoice-001';
--- Display: £1000.00 (WRONG! Ini seharusnya $1000.00)
-
--- Accounting nightmare! Values terlihat salah!
 ```
 
-**Kesimpulan:**
+Secara internal, nilai yang disimpan adalah `1000.00` dan tampil sebagai `$1000.00`.
 
-> `MONEY` type **TIDAK MENYIMPAN currency information**. Hanya nilai numerik + formatting bergantung locale. **Sangat berbahaya** untuk aplikasi multi-currency atau sistem yang bisa berubah locale.
-
-### d. Summary: Masalah dengan Tipe MONEY
-
-**Recap dua masalah utama:**
-
-**Problem #1: Limited Precision**
-
-- ✅ **Pro:** Operations dijamin precise
-- ❌ **Con:** Hanya 2 decimal places (fractional cents impossible)
-
-**Problem #2: Locale-Dependent Display**
-
-- ❌ **Con:** Currency symbol berubah sesuai `lc_monetary`
-- ❌ **Con:** Tidak ada actual currency conversion
-- ❌ **Con:** Data bisa misleading/confusing
-
-**Video quote:**
-
-> "I'm going to beg you to not use it to store money in the database."
-
-### e. SOLUSI #1: Store sebagai INTEGER (Recommended!)
-
-**Konsep:**
-Simpan uang dalam **unit terkecil** currency (seperti cents untuk USD) sebagai INTEGER.
-
-**Pendekatan:**
+Namun, di waktu lain — misalnya setelah sistem restart atau saat Tenant B aktif:
 
 ```sql
--- Store everything in CENTS (smallest unit)
+SET lc_monetary = 'en_GB.UTF-8';
+SELECT * FROM invoices WHERE invoice_id = 'Invoice-001';
+```
+
+Hasilnya:
+
+```text
+£1000.00
+```
+
+Invoice yang seharusnya bernilai **$1000 USD** kini terlihat sebagai **£1000 GBP**. Ini adalah mimpi buruk untuk akuntansi, audit, dan laporan keuangan.
+
+#### Kesimpulan
+
+Tipe data `MONEY` **tidak menyimpan informasi mata uang sama sekali**. Ia hanya menyimpan angka, sementara simbol dan formatnya sepenuhnya dikendalikan oleh locale. Akibatnya, perubahan `lc_monetary` dapat membuat data yang sama terlihat memiliki makna finansial yang berbeda.
+
+Untuk aplikasi yang mendukung multi-currency, multi-tenant, atau berjalan di lingkungan dengan konfigurasi locale yang bisa berubah, kondisi ini **sangat berbahaya**. Inilah salah satu alasan utama kenapa tipe `MONEY` hampir selalu dihindari dalam sistem yang serius dan berskala besar.
+
+### d. SOLUSI #1: Store sebagai INTEGER (Recommended!)
+
+Pendekatan paling umum dan paling aman untuk menyimpan data finansial di database adalah **menyimpan uang sebagai bilangan bulat (INTEGER)**. Ide utamanya sederhana: jangan simpan uang dalam bentuk desimal, tetapi simpan dalam **unit terkecil dari mata uang tersebut**, misalnya cents untuk USD.
+
+Dengan cara ini, kita sepenuhnya menghindari masalah presisi, pembulatan, dan ketergantungan locale yang muncul pada tipe seperti `FLOAT` atau `MONEY`.
+
+#### Konsep Dasar
+
+Alih-alih menyimpan `$100.78` sebagai `100.78`, kita menyimpannya sebagai:
+
+```
+10078 cents
+```
+
+Artinya:
+
+- `$1.00` → `100`
+- `$25.50` → `2550`
+- `$100.78` → `10078`
+
+Semua nilai disimpan sebagai **angka bulat**, tanpa koma sama sekali.
+
+#### Pendekatan Implementasi
+
+Contoh implementasi sederhana di PostgreSQL:
+
+```sql
 CREATE TABLE products (
     product_name TEXT,
-    price_cents INTEGER  -- Store cents, bukan dollars
+    price_cents INTEGER  -- Disimpan dalam cents, bukan dollars
 );
+```
 
--- $100.78 = 10078 cents
+Saat memasukkan data, kita langsung memasukkan nilai dalam cents:
+
+```sql
 INSERT INTO products VALUES ('Laptop', 10078);
-
--- $25.50 = 2550 cents
 INSERT INTO products VALUES ('Mouse', 2550);
+```
 
--- Query
+Ketika ingin menampilkan data ke user, kita lakukan konversi saat query:
+
+```sql
 SELECT
     product_name,
     price_cents,
-    price_cents / 100.0 AS price_dollars  -- Convert untuk display
+    price_cents / 100.0 AS price_dollars
 FROM products;
-
--- Result:
--- Laptop  | 10078 | 100.78
--- Mouse   | 2550  | 25.50
 ```
 
-**Conversion logic:**
+Hasilnya:
 
-```sql
--- Dollars to Cents (storage)
-SELECT (100.78 * 100)::INT4;  -- 10078 cents
-
--- Cents to Dollars (display)
-SELECT 10078 / 100.0;  -- 100.78 dollars
+```text
+Laptop | 10078 | 100.78
+Mouse  | 2550  | 25.50
 ```
 
-**Untuk fractional cents (jika dibutuhkan):**
+Data disimpan dengan aman sebagai integer, sementara konversi ke format yang ramah manusia dilakukan hanya saat dibutuhkan.
+
+#### Logika Konversi yang Jelas
+
+Konversi dua arah ini sangat sederhana dan konsisten.
+
+Untuk penyimpanan (dollars ke cents):
 
 ```sql
--- Store in thousandths of a cent (0.001¢)
+SELECT (100.78 * 100)::INT4;
+-- Result: 10078
+```
+
+Untuk tampilan (cents ke dollars):
+
+```sql
+SELECT 10078 / 100.0;
+-- Result: 100.78
+```
+
+Tidak ada pembulatan tersembunyi, tidak ada kejutan.
+
+#### Menangani Fractional Cents
+
+Pada beberapa kasus, seperti perhitungan pajak, bunga, atau harga berbasis volume, kita mungkin membutuhkan presisi lebih dari sekadar cents.
+
+Solusinya tetap sama: simpan dalam unit yang lebih kecil lagi.
+
+```sql
 CREATE TABLE precise_prices (
     product_name TEXT,
-    price_millis INTEGER  -- Thousandths of a cent
+    price_millis INTEGER  -- Thousandths of a cent (0.001¢)
 );
+```
 
--- $100.789 = 100789 millis (100.789 * 1000)
+Misalnya:
+
+```sql
 INSERT INTO precise_prices VALUES ('Item', 100789);
-
--- Convert back
-SELECT 100789 / 1000.0;  -- 100.789
 ```
 
-**Keuntungan INTEGER approach:**
-
-**1. Performance - Sangat Cepat:**
+Nilai ini merepresentasikan:
 
 ```
-INTEGER operations adalah yang TERCEPAT:
-- Addition: native CPU operation
-- Comparison: instant
-- Indexing: optimal
+100.789 * 1000 = 100789
 ```
 
-**2. Accuracy - Perfectly Precise:**
+Untuk menampilkan kembali:
 
 ```sql
--- No floating-point errors
-SELECT (10078 + 2550);  -- 12628 (exact!)
-
--- Dibanding float
-SELECT (100.78 + 25.50)::FLOAT8;  -- 126.28000000000002 (ugh!)
+SELECT 100789 / 1000.0;
+-- Result: 100.789
 ```
 
-**3. Simplicity - Easy to Reason:**
+Pendekatan ini tetap menjaga akurasi penuh tanpa melibatkan angka pecahan saat penyimpanan.
 
-```
-Price in cents: 10078
-Always an integer, no ambiguity
-Can't accidentally introduce precision errors
-```
+#### Keuntungan Pendekatan INTEGER
 
-**4. API-Friendly:**
+#### Performa: Sangat Cepat
 
-```
-Stripe API menggunakan metode ini!
-Amount dalam smallest currency unit:
-- USD: cents
-- JPY: yen (already no decimals)
-- EUR: euro cents
-```
+Operasi integer adalah operasi paling optimal di CPU:
 
-**Real-world example (Stripe-style):**
+- Penjumlahan dan pengurangan dilakukan secara native
+- Perbandingan sangat cepat
+- Indexing pada kolom integer sangat efisien
+
+Ini menjadikan pendekatan ini ideal untuk sistem dengan volume transaksi tinggi.
+
+#### Akurasi: Presisi Sempurna
+
+Dengan integer, tidak ada konsep floating-point error.
 
 ```sql
--- Orders table (Stripe-inspired)
+SELECT (10078 + 2550);
+-- Result: 12628 (exact)
+```
+
+Bandingkan dengan float:
+
+```sql
+SELECT (100.78 + 25.50)::FLOAT8;
+-- Result: 126.28000000000002
+```
+
+Kesalahan kecil seperti ini sering tidak terlihat, tetapi bisa menumpuk dan menimbulkan masalah besar di sistem finansial.
+
+#### Kesederhanaan: Mudah Dipahami dan Diprediksi
+
+Nilai selalu berupa angka bulat:
+
+```
+10078 = $100.78
+```
+
+Tidak ada ambiguitas, tidak ada kemungkinan menyimpan nilai setengah jalan. Selama konvensinya jelas, logikanya sangat mudah diikuti.
+
+#### API-Friendly dan Terbukti di Dunia Nyata
+
+Banyak payment gateway besar menggunakan pendekatan ini. Salah satu contohnya adalah Stripe, yang selalu menerima amount dalam **smallest currency unit**:
+
+- USD → cents
+- EUR → euro cents
+- JPY → yen (memang tidak memiliki desimal)
+
+Pendekatan ini terbukti aman dan skalabel.
+
+#### Contoh Nyata: Desain ala Stripe
+
+```sql
 CREATE TABLE orders (
     order_id BIGINT PRIMARY KEY,
     customer_id BIGINT,
-    amount_cents INTEGER,     -- USD cents
-    currency CHAR(3),         -- 'USD', 'EUR', 'GBP'
+    amount_cents INTEGER,   -- USD cents
+    currency CHAR(3),       -- 'USD', 'EUR', 'GBP'
     status TEXT
 );
+```
 
--- Create order for $49.99
+Membuat order senilai `$49.99`:
+
+```sql
 INSERT INTO orders VALUES
     (1, 100, 4999, 'USD', 'paid');
+```
 
--- Query untuk display
+Menampilkan ke user:
+
+```sql
 SELECT
     order_id,
     amount_cents / 100.0 AS amount_dollars,
     currency
 FROM orders;
--- Result: 1 | 49.99 | USD
 ```
 
-**Trade-offs:**
+Hasilnya:
 
-**✅ Pros:**
+```text
+1 | 49.99 | USD
+```
 
-- ⚡ Blazing fast (native integer operations)
-- ✅ Perfectly accurate (no precision loss)
-- 🎯 Simple to understand
-- 🔒 Type-safe (can't accidentally use float)
-- 📦 Easy to serialize/deserialize untuk APIs
+#### Trade-offs yang Perlu Dipahami
 
-**⚠️ Cons:**
+Pendekatan ini memang bukan tanpa konsekuensi.
 
-- 🔄 Conversion overhead (multiply on insert, divide on display)
-- 🧠 Mental overhead (harus ingat unit: "10078 = $100.78")
-- 📝 Application logic harus handle conversion
-- ⚠️ Developer bisa lupa convert (show "10078" ke user!)
+#### Kelebihan
 
-**Best practices:**
+- Operasi sangat cepat
+- Akurasi sempurna, tanpa kehilangan presisi
+- Logika jelas dan konsisten
+- Aman untuk integrasi API
+- Sulit “tidak sengaja” melakukan perhitungan dengan float
+
+#### Kekurangan
+
+- Perlu konversi saat insert dan saat display
+- Developer harus selalu sadar satuan yang digunakan
+- Logika aplikasi bertanggung jawab penuh atas konversi
+- Kesalahan naming kolom bisa membingungkan
+
+#### Best Practices agar Tetap Aman
+
+Gunakan penamaan kolom yang eksplisit:
 
 ```sql
--- ✅ GOOD: Clear naming
 CREATE TABLE invoices (
-    amount_cents INTEGER,  -- Jelas: dalam cents
+    amount_cents INTEGER,
     currency_code CHAR(3)
 );
+```
 
--- ✅ GOOD: Helper functions
+Sediakan helper function untuk konversi:
+
+```sql
 CREATE FUNCTION cents_to_dollars(cents INTEGER)
 RETURNS NUMERIC(10,2) AS $$
 BEGIN
     RETURN cents / 100.0;
 END;
 $$ LANGUAGE plpgsql;
+```
 
--- ✅ GOOD: Views untuk display
+Gunakan view untuk kebutuhan display:
+
+```sql
 CREATE VIEW invoices_display AS
 SELECT
     invoice_id,
     cents_to_dollars(amount_cents) AS amount,
     currency_code
 FROM invoices;
+```
 
--- ❌ BAD: Ambiguous naming
+Hindari penamaan yang ambigu:
+
+```sql
 CREATE TABLE bad_table (
-    price INTEGER  -- Price dalam apa? Dollars? Cents? Unclear!
+    price INTEGER  -- Tidak jelas: cents atau dollars?
 );
 ```
 
-### f. SOLUSI #2: Store sebagai NUMERIC
+Dengan disiplin penamaan dan konvensi yang jelas, pendekatan **INTEGER sebagai penyimpan nilai uang** adalah solusi paling aman, cepat, dan terpercaya untuk sistem finansial modern.
 
-**Konsep:**
-Simpan sebagai `NUMERIC` dengan precision dan scale yang sesuai kebutuhan.
+### e. SOLUSI #2: Store sebagai NUMERIC
 
-**Basic approach:**
+Solusi kedua yang sangat umum dan juga **sangat aman** untuk menyimpan nilai uang adalah menggunakan tipe data `NUMERIC`. Pendekatan ini menekankan kejelasan dan presisi: nilai uang disimpan sebagai angka desimal dengan **jumlah digit dan jumlah angka di belakang koma yang ditentukan secara eksplisit**.
+
+Berbeda dengan `FLOAT`, tipe `NUMERIC` tidak menggunakan representasi floating-point biner, sehingga **tidak menimbulkan error presisi**. Inilah alasan utama kenapa `NUMERIC` sering menjadi pilihan default di sistem finansial.
+
+#### Konsep Dasar
+
+Dengan `NUMERIC`, kita menentukan dua hal penting:
+
+- **Precision** → total jumlah digit
+- **Scale** → jumlah digit di belakang koma
+
+Contoh `NUMERIC(10, 2)` berarti:
+
+- Total maksimal 10 digit
+- 2 digit di belakang koma
+- Nilai maksimum: `99,999,999.99`
+
+#### Pendekatan Dasar
+
+Contoh penggunaan paling umum untuk mata uang standar:
 
 ```sql
--- Standard untuk most currencies (2 decimal places)
 CREATE TABLE products (
     product_name TEXT,
-    price NUMERIC(10, 2)  -- Max 99,999,999.99
+    price NUMERIC(10, 2)
 );
+```
 
--- Insert
+Memasukkan data terasa alami, sama seperti menulis nilai uang sehari-hari:
+
+```sql
 INSERT INTO products VALUES
     ('Laptop', 999.99),
     ('Mouse', 25.50);
-
--- Query (already in correct format!)
-SELECT * FROM products;
--- Result:
--- Laptop | 999.99
--- Mouse  | 25.50
 ```
 
-**Precision options:**
+Ketika data di-query:
 
-**1. Standard retail (2 decimals):**
+```sql
+SELECT * FROM products;
+```
+
+Hasilnya langsung tampil dalam format yang benar:
+
+```text
+Laptop | 999.99
+Mouse  | 25.50
+```
+
+Tidak perlu konversi tambahan untuk keperluan display.
+
+#### Opsi Precision Sesuai Kebutuhan
+
+Salah satu keunggulan utama `NUMERIC` adalah fleksibilitasnya. Kita bisa menyesuaikan precision dan scale sesuai konteks bisnis.
+
+#### Standar Retail (2 Desimal)
 
 ```sql
 price NUMERIC(10, 2)
--- Max: $99,999,999.99 (almost 100 million)
--- Perfect untuk e-commerce, retail
 ```
 
-**2. High-value transactions:**
+Cukup untuk e-commerce dan retail, dengan kapasitas hingga hampir 100 juta per transaksi.
+
+#### Transaksi Bernilai Besar
 
 ```sql
 price NUMERIC(15, 2)
--- Max: $9,999,999,999,999.99 (almost 10 trillion)
--- Perfect untuk B2B, enterprise, banking
 ```
 
-**3. Fractional cents (4 decimals):**
+Cocok untuk sistem B2B, enterprise, atau perbankan, dengan nilai hingga hampir 10 triliun.
+
+#### Fractional Cents
 
 ```sql
 price NUMERIC(10, 4)
--- Example: $100.7800
--- Untuk tax calculations, financial instruments
 ```
 
-**4. Cryptocurrency:**
+Digunakan untuk kebutuhan seperti perhitungan pajak, bunga, atau instrumen keuangan yang membutuhkan presisi lebih dari dua desimal.
+
+#### Cryptocurrency
 
 ```sql
 price NUMERIC(30, 18)
--- Support sampai 18 decimal places (Ethereum standard)
--- Bitcoin: 8 decimals, Ethereum: 18 decimals
 ```
 
-**5. Unbounded (maximum flexibility):**
+Mendukung hingga 18 angka di belakang koma, sesuai standar Ethereum. Bitcoin sendiri menggunakan 8 desimal, yang juga terakomodasi dengan mudah.
+
+#### Tanpa Batas (Unbounded)
 
 ```sql
 price NUMERIC
--- No limits, accept anything
--- Trade-off: no built-in validation
 ```
 
-**Contoh lengkap:**
+Pendekatan ini memberikan fleksibilitas maksimum, tetapi juga berisiko karena tidak ada validasi bawaan terhadap ukuran dan skala nilai.
+
+#### Contoh Implementasi Lengkap
+
+Berikut contoh tabel transaksi yang lebih realistis:
 
 ```sql
--- Complete money table dengan NUMERIC
 CREATE TABLE transactions (
     transaction_id BIGINT PRIMARY KEY,
     amount NUMERIC(10, 2),
@@ -456,266 +661,294 @@ CREATE TABLE transactions (
     description TEXT,
     created_at TIMESTAMP
 );
+```
 
--- Insert various amounts
+Memasukkan berbagai jenis transaksi:
+
+```sql
 INSERT INTO transactions VALUES
     (1, 1234.56, 'USD', 'Payment received', NOW()),
     (2, 0.99, 'USD', 'Micro-transaction', NOW()),
     (3, 999999.99, 'USD', 'Large payment', NOW());
+```
 
--- Math operations (perfectly precise!)
+Melakukan operasi matematika:
+
+```sql
 SELECT
     SUM(amount) AS total,
     AVG(amount) AS average,
     MAX(amount) AS largest
 FROM transactions;
--- Result: All exact, no floating-point errors!
 ```
 
-**Keuntungan NUMERIC approach:**
+Semua hasil perhitungan di atas **akurat sepenuhnya**, tanpa floating-point error sekecil apa pun.
 
-**1. Perfect Precision:**
+#### Keunggulan Pendekatan NUMERIC
+
+#### Presisi Sempurna
+
+`NUMERIC` menyimpan angka dalam representasi desimal yang eksak.
 
 ```sql
--- Absolutely no precision loss
 SELECT 100.33::NUMERIC / 3;
--- Result: 33.443333333333333333... (exact!)
+```
 
--- Dibanding FLOAT
+Hasilnya:
+
+```text
+33.443333333333333333...
+```
+
+Bandingkan dengan `FLOAT`:
+
+```sql
 SELECT 100.33::FLOAT8 / 3;
--- Result: 33.44333333333334 (slight error)
 ```
 
-**2. Flexibility:**
+Hasilnya sedikit meleset, meskipun tampak sepele. Dalam sistem finansial, selisih kecil ini tidak bisa ditoleransi.
+
+#### Fleksibel dan Adaptif
+
+Precision bisa disesuaikan kapan pun sesuai kebutuhan domain bisnis, mulai dari retail sederhana hingga aset kripto.
+
+#### Native SQL dan Mudah Digunakan
+
+Nilai langsung siap ditampilkan tanpa konversi tambahan:
 
 ```sql
--- Bisa adjust precision per kebutuhan
-NUMERIC(10, 2)  -- Standard
-NUMERIC(10, 4)  -- More precision
-NUMERIC(30, 18) -- Crypto
-NUMERIC         -- Unbounded
-```
-
-**3. SQL-Native:**
-
-```sql
--- No conversion needed untuk display
 SELECT amount FROM transactions;
--- Shows: 100.78 (already formatted)
-
--- Dibanding INTEGER approach
-SELECT amount_cents / 100.0 FROM transactions;
--- Extra conversion step
 ```
 
-**4. Clear Intent:**
+Ini berbeda dengan pendekatan integer yang membutuhkan pembagian untuk keperluan display.
+
+#### Maksud yang Jelas
+
+Deklarasi seperti:
 
 ```sql
--- Self-documenting
 price NUMERIC(10, 2)
--- Jelas: decimal number dengan 2 places
 ```
 
-**Trade-offs:**
+Secara implisit sudah menjelaskan bahwa kolom tersebut adalah angka desimal dengan dua digit di belakang koma. Skema database menjadi lebih mudah dibaca dan dipahami.
 
-**✅ Pros:**
+#### Trade-off yang Perlu Dipertimbangkan
 
-- ✅ Perfect accuracy (critical untuk money!)
-- 🎯 Natural representation (100.78 ya 100.78)
-- 🔧 Flexible precision (sesuaikan per kebutuhan)
-- 📊 Built-in validation (precision/scale enforced)
-- 🎨 No conversion untuk display
+Pendekatan `NUMERIC` bukan tanpa kompromi.
 
-**⚠️ Cons:**
+#### Kelebihan
 
-- 🐌 **Slower** than INTEGER (demonstrated: ~2x slower)
-- 💾 Variable storage size (bisa lebih besar)
-- ⚠️ Unbounded NUMERIC = no validation
+- Presisi sempurna, sangat krusial untuk data uang
+- Representasi alami dan mudah dipahami
+- Precision dapat disesuaikan
+- Validasi bawaan melalui precision dan scale
+- Tidak perlu konversi untuk display
 
-**Performance comparison (recall dari video sebelumnya):**
+#### Kekurangan
 
-```
-INTEGER:  ~1.5s for 20M operations (fastest)
-NUMERIC:  ~4.5s for 20M operations (slower)
-Difference: ~3x slower than INTEGER
+- Performa lebih lambat dibanding INTEGER
+- Ukuran penyimpanan bisa lebih besar
+- `NUMERIC` tanpa batas berisiko jika tanpa validasi tambahan
 
-Tapi untuk money: PRECISION > SPEED!
-```
+Dalam benchmark sederhana, operasi `NUMERIC` bisa beberapa kali lebih lambat dibanding INTEGER. Namun untuk data finansial, **akurasi selalu lebih penting daripada kecepatan mentah**.
 
-**Best practices:**
+#### Best Practices
+
+Gunakan precision yang eksplisit:
 
 ```sql
--- ✅ GOOD: Explicit precision
 CREATE TABLE prices (
     amount NUMERIC(10, 2) NOT NULL CHECK (amount >= 0)
 );
+```
 
--- ✅ GOOD: Separate currency column
+Pisahkan nilai dan mata uang:
+
+```sql
 CREATE TABLE multi_currency (
     amount NUMERIC(10, 2),
-    currency CHAR(3) NOT NULL  -- 'USD', 'EUR', etc.
-);
-
--- ⚠️ RISKY: Unbounded tanpa validation
-CREATE TABLE risky (
-    amount NUMERIC  -- No limits, bisa anything!
-);
-
--- ✅ BETTER: Bounded with CHECK
-CREATE TABLE better (
-    amount NUMERIC(15, 2) CHECK (amount BETWEEN 0 AND 999999999.99)
+    currency CHAR(3) NOT NULL
 );
 ```
 
-### g. Handling Multiple Currencies
-
-**Problem:**
-Bagaimana cara store data uang untuk multiple currencies?
-
-**RECOMMENDED: Separate Currency Column**
+Hindari `NUMERIC` tanpa batas tanpa validasi:
 
 ```sql
--- ✅ BEST PRACTICE: Amount + Currency Code
+CREATE TABLE risky (
+    amount NUMERIC
+);
+```
+
+Jika membutuhkan fleksibilitas lebih, tetap berikan batasan:
+
+```sql
+CREATE TABLE better (
+    amount NUMERIC(15, 2)
+    CHECK (amount BETWEEN 0 AND 999999999.99)
+);
+```
+
+Dengan konfigurasi yang tepat, tipe data `NUMERIC` memberikan keseimbangan terbaik antara **kejelasan, fleksibilitas, dan presisi**, menjadikannya pilihan yang sangat solid untuk penyimpanan data uang di database.
+
+### f. Handling Multiple Currencies
+
+Ketika aplikasi hanya berurusan dengan satu mata uang, desain penyimpanan data uang relatif sederhana. Namun, begitu sistem mulai menangani **lebih dari satu currency**, desain skema database harus dibuat dengan sangat hati-hati agar tidak menimbulkan kebingungan, kesalahan perhitungan, atau representasi data yang menyesatkan.
+
+Masalah utamanya adalah: **bagaimana menyimpan nilai uang tanpa kehilangan konteks mata uangnya**.
+
+#### Prinsip Utama: Pisahkan Nilai dan Mata Uang
+
+Praktik terbaik yang direkomendasikan adalah **menyimpan nilai uang dan kode mata uang dalam kolom terpisah**. Nilai disimpan sebagai angka (INTEGER atau NUMERIC), sedangkan mata uang disimpan sebagai kode standar.
+
+Contoh desain yang direkomendasikan:
+
+```sql
 CREATE TABLE transactions (
     transaction_id BIGINT PRIMARY KEY,
-    amount NUMERIC(15, 2),     -- atau INTEGER (cents)
+    amount NUMERIC(15, 2),     -- Bisa juga INTEGER (dalam unit terkecil)
     currency_code CHAR(3),     -- ISO 4217: 'USD', 'EUR', 'GBP'
     description TEXT
 );
+```
 
--- Insert berbagai currency
+Dengan skema ini, setiap baris data memiliki konteks mata uang yang jelas dan tidak ambigu.
+
+#### Contoh Penggunaan dengan Berbagai Mata Uang
+
+Memasukkan data dari berbagai negara:
+
+```sql
 INSERT INTO transactions VALUES
     (1, 100.00, 'USD', 'US payment'),
     (2, 85.50, 'EUR', 'European payment'),
     (3, 75.99, 'GBP', 'UK payment');
+```
 
--- Query per currency
+Ketika melakukan agregasi, kita bisa mengelompokkan berdasarkan mata uang:
+
+```sql
 SELECT
     SUM(amount) AS total,
     currency_code
 FROM transactions
 GROUP BY currency_code;
-
--- Result:
--- 100.00 | USD
--- 85.50  | EUR
--- 75.99  | GBP
 ```
 
-**Schema design recommendations:**
+Hasilnya:
 
-**1. Jika SEMUA data ALWAYS single currency (e.g., USD):**
+```text
+100.00 | USD
+85.50  | EUR
+75.99  | GBP
+```
+
+Nilai tidak pernah dicampur antar currency, sehingga hasilnya tetap masuk akal secara finansial.
+
+#### Rekomendasi Desain Skema Berdasarkan Kebutuhan
+
+Tidak semua sistem membutuhkan fleksibilitas yang sama. Desain skema sebaiknya disesuaikan dengan kebutuhan nyata aplikasi.
+
+#### Kasus 1: Selalu Satu Mata Uang
+
+Jika aplikasi **dipastikan** hanya akan menggunakan satu mata uang, misalnya USD, maka menyimpan kolom mata uang justru menjadi redundan.
 
 ```sql
--- DON'T store currency column (waste of space)
 CREATE TABLE us_only (
     amount NUMERIC(10, 2)
-    -- Assumed: Always USD
 );
 ```
 
-**2. Jika support MULTIPLE currencies:**
+Dalam skema ini, mata uang diasumsikan secara implisit. Pendekatan ini aman selama asumsi tersebut tidak pernah berubah.
+
+#### Kasus 2: Mendukung Banyak Mata Uang
+
+Jika aplikasi mendukung lebih dari satu currency, maka kolom mata uang **wajib ada**.
 
 ```sql
--- DO store currency column
 CREATE TABLE multi_currency (
     amount NUMERIC(10, 2) NOT NULL,
-    currency_code CHAR(3) NOT NULL,  -- Required!
-    CHECK (currency_code IN ('USD', 'EUR', 'GBP', 'JPY', ...))
+    currency_code CHAR(3) NOT NULL,
+    CHECK (currency_code IN ('USD', 'EUR', 'GBP', 'JPY'))
 );
 ```
 
-**3. Dengan foreign key untuk validation:**
+Constraint ini membantu mencegah nilai mata uang yang tidak valid masuk ke database.
+
+#### Kasus 3: Validasi dengan Foreign Key
+
+Untuk sistem yang lebih kompleks dan terstruktur, sebaiknya mata uang direferensikan ke tabel khusus.
 
 ```sql
--- Currency reference table
 CREATE TABLE currencies (
     code CHAR(3) PRIMARY KEY,
     name TEXT,
-    decimal_places SMALLINT,  -- 2 for USD, 0 for JPY
+    decimal_places SMALLINT,
     symbol TEXT
 );
+```
 
+Contoh data referensi:
+
+```sql
 INSERT INTO currencies VALUES
     ('USD', 'US Dollar', 2, '$'),
     ('EUR', 'Euro', 2, '€'),
     ('JPY', 'Japanese Yen', 0, '¥'),
     ('BTC', 'Bitcoin', 8, '₿');
+```
 
--- Transactions dengan FK
+Kemudian, tabel transaksi bisa mengacu ke tabel ini:
+
+```sql
 CREATE TABLE transactions (
-    amount NUMERIC(15, 8),  -- Support up to 8 decimals
+    amount NUMERIC(15, 8),
     currency_code CHAR(3) REFERENCES currencies(code)
 );
 ```
 
-**4. INTEGER approach dengan multiple currencies:**
+Dengan pendekatan ini, validasi mata uang terpusat dan konsisten, serta sistem siap menangani perbedaan jumlah desimal antar currency.
+
+#### Pendekatan INTEGER untuk Multi-Currency
+
+Pendekatan INTEGER tetap bisa digunakan, tetapi logikanya menjadi lebih kompleks karena setiap mata uang memiliki **unit terkecil yang berbeda**.
 
 ```sql
--- Trickier: Need to know smallest unit per currency
 CREATE TABLE transactions (
-    amount_smallest_unit BIGINT,  -- Cents for USD, Yen for JPY
+    amount_smallest_unit BIGINT,
     currency_code CHAR(3)
 );
-
--- Conversion logic per currency
--- USD: divide by 100 (cents to dollars)
--- JPY: divide by 1 (yen is already smallest)
--- BTC: divide by 100000000 (satoshi to BTC)
 ```
 
-**Warning about MONEY type:**
+Makna dari `amount_smallest_unit` bergantung pada `currency_code`:
+
+- USD → cents (bagi 100 untuk display)
+- JPY → yen (tidak perlu dibagi)
+- BTC → satoshi (bagi 100.000.000)
+
+Artinya, logika konversi harus ditangani secara eksplisit di level aplikasi atau query.
+
+#### Peringatan Keras tentang Tipe MONEY
+
+Menggunakan tipe `MONEY` untuk skenario multi-currency adalah kesalahan desain yang serius.
 
 ```sql
--- ❌ NEVER rely on MONEY for multi-currency
 CREATE TABLE bad_multi (
-    amount MONEY  -- Which currency? Depends on lc_monetary!
+    amount MONEY
 );
-
--- DISASTER waiting to happen!
 ```
 
-### h. Optional: MONEY untuk Display (Bukan Storage)
+Tipe ini tidak menyimpan informasi mata uang sama sekali dan sepenuhnya bergantung pada `lc_monetary`. Dalam konteks multi-currency, ini adalah **bencana yang tinggal menunggu waktu**.
 
-**Valid use case:**
-Jika SUDAH store sebagai NUMERIC, bisa cast ke MONEY **hanya untuk presentation**.
+#### Kesimpulan
 
-```sql
--- Storage: NUMERIC
-CREATE TABLE products (
-    name TEXT,
-    price NUMERIC(10, 2)
-);
+Untuk menangani multiple currencies dengan aman dan jelas:
 
-INSERT INTO products VALUES ('Laptop', 999.99);
+- Selalu pisahkan nilai dan mata uang
+- Gunakan `NUMERIC` atau `INTEGER`, bukan `MONEY`
+- Simpan kode mata uang sesuai standar (ISO 4217)
+- Tambahkan validasi melalui CHECK atau foreign key
 
--- Display: Cast to MONEY untuk formatting
-SELECT
-    name,
-    price,
-    price::MONEY AS formatted_price
-FROM products;
-
--- Result:
--- Laptop | 999.99 | $999.99
-
--- Benefit: Get currency symbol dan formatting
--- Safe: Underlying storage tetap NUMERIC
-```
-
-**Pattern ini OK karena:**
-
-- ✅ Storage tetap sebagai NUMERIC (safe)
-- ✅ MONEY hanya untuk display (cosmetic)
-- ✅ Locale issue tidak affect storage
-
-**Tapi sebaiknya:**
-
-```sql
--- ✅ BETTER: Format di application layer
--- Don't rely on database untuk presentation formatting
--- Let frontend/app handle "$999.99" vs "999,99 €"
-```
+Dengan desain seperti ini, data keuangan tetap konsisten, mudah dipahami, dan aman untuk dikembangkan dalam jangka panjang.
 
 ## 3. Hubungan Antar Konsep
 
